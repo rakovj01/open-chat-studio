@@ -1,2 +1,3 @@
-web: gunicorn open-chat-studio.wsgi
+web: PYTHONPATH=/app/ gunicorn open-chat-studio.wsgi
+
 
