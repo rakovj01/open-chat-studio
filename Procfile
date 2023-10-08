@@ -1,3 +1,4 @@
-web: PYTHONPATH=/app/ gunicorn open-chat-studio.wsgi
+web: gunicorn gpt_playground.wsgi
+
 
 
