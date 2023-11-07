@@ -1,3 +1,5 @@
+import dj_database_url
+
 """
 Django settings for GPT Playground project.
 
@@ -144,15 +146,11 @@ if "DATABASE_URL" in env:
     DATABASES = {"default": env.db()}
 else:
     DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql_psycopg2",
-            "NAME": env("DJANGO_DATABASE_NAME", default="gpt_playground"),
-            "USER": env("DJANGO_DATABASE_USER", default="postgres"),
-            "PASSWORD": env("DJANGO_DATABASE_PASSWORD", default="postgres"),
-            "HOST": env("DJANGO_DATABASE_HOST", default="localhost"),
-            "PORT": env("DJANGO_DATABASE_PORT", default="5432"),
-        }
+        "default": dj_database_url.config(
+            default=os.getenv("DATABASE_URL", "sqlite:///" + os.path.join(BASE_DIR, "db.sqlite3"))
+        )
     }
+
 
 # Auth / login stuff
 
@@ -273,9 +271,16 @@ DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
 # use in development
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
-# use in production
-# see https://github.com/anymail/django-anymail for more details/examples
-# EMAIL_BACKEND = "anymail.backends.mailgun.EmailBackend"
+
+# Detect if we are running on Heroku
+if os.environ.get("DJANGO_ENV") == "production":
+    # use in production
+    EMAIL_BACKEND = "anymail.backends.mailgun.EmailBackend"
+    ANYMAIL = {
+        "MAILGUN_API_KEY": os.environ.get("MAILGUN_API_KEY"),
+        "MAILGUN_SENDER_DOMAIN": os.environ.get("MAILGUN_SENDER_DOMAIN"),
+    }
+
 
 # Django sites
 
@@ -323,7 +328,10 @@ else:
 if REDIS_URL.startswith("rediss"):
     REDIS_URL = f"{REDIS_URL}?ssl_cert_reqs=none"
 
-CELERY_BROKER_URL = CELERY_RESULT_BACKEND = REDIS_URL
+import os
+
+CELERY_BROKER_URL = os.environ.get("REDIS_URL", "")
+CELERY_RESULT_BACKEND = os.environ.get("REDIS_URL", "")
 WAGTAILADMIN_BASE_URL = "http://localhost:8000"
 
 # Waffle config
@@ -388,6 +396,11 @@ LOGGING = {
         "gpt_playground": {
             "handlers": ["console"],
             "level": env("GPT_PLAYGROUND_LOG_LEVEL", default="INFO"),
+        },
+        "django.request": {  # Add this logger for request-related errors
+            "handlers": ["console"],
+            "level": "ERROR",  # Log errors and exceptions
+            "propagate": False,  # Don't propagate errors to the root logger
         },
     },
 }
