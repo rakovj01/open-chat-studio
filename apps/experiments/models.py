@@ -1,23 +1,48 @@
 import uuid
 
+import markdown
 from django.conf import settings
-from django.core.validators import MaxValueValidator, MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator, validate_email
 from django.db import models
 from django.urls import reverse
-from django.utils import timezone
 from django.utils.translation import gettext
+from field_audit import audit_fields
+from field_audit.models import AuditingManager
 
-from apps.chat.models import Chat
-from apps.teams.models import BaseTeamModel, Team
+from apps.chat.models import Chat, ChatMessage, ChatMessageType
+from apps.experiments import model_audit_fields
+from apps.teams.models import BaseTeamModel
 from apps.utils.models import BaseModel
 from apps.web.meta import absolute_url
 
 
-class Prompt(BaseModel):
+class PromptObjectManager(AuditingManager):
+    pass
+
+
+class ExperimentObjectManager(AuditingManager):
+    pass
+
+
+class SourceMaterialObjectManager(AuditingManager):
+    pass
+
+
+class SafetyLayerObjectManager(AuditingManager):
+    pass
+
+
+class ConsentFormObjectManager(AuditingManager):
+    pass
+
+
+@audit_fields(*model_audit_fields.PROMPT_FIELDS, audit_special_queryset_writes=True)
+class Prompt(BaseTeamModel):
     """
     A prompt - typically the starting point for ChatGPT.
     """
 
+    objects = PromptObjectManager()
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     name = models.CharField(max_length=50)
     description = models.TextField(blank=True, default="", verbose_name="A longer description of what the prompt does.")
@@ -29,6 +54,9 @@ class Prompt(BaseModel):
         "E.g. 'Safe or unsafe? {input}'",
     )
 
+    class Meta:
+        ordering = ["name"]
+
     def __str__(self):
         return self.name
 
@@ -39,7 +67,7 @@ class Prompt(BaseModel):
             return input_str
 
 
-class PromptBuilderHistory(BaseModel):
+class PromptBuilderHistory(BaseTeamModel):
     """
     History entries for the prompt builder
     """
@@ -51,26 +79,32 @@ class PromptBuilderHistory(BaseModel):
         return str(self.history)
 
 
-class SourceMaterial(BaseModel):
+@audit_fields(*model_audit_fields.SOURCE_MATERIAL_FIELDS, audit_special_queryset_writes=True)
+class SourceMaterial(BaseTeamModel):
     """
     Some Source Material on a particular topic.
     """
 
+    objects = SourceMaterialObjectManager()
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     topic = models.CharField(max_length=50)
     description = models.TextField(null=True, default="", verbose_name="A longer description of the source material.")
     material = models.TextField()
 
+    class Meta:
+        ordering = ["topic"]
+
     def __str__(self):
         return self.topic
 
 
-class SafetyLayer(BaseModel):
-    REVIEW_CHOICES = (("human", "Human messages"), ("ai", "AI messages"))
+@audit_fields(*model_audit_fields.SAFETY_LAYER_FIELDS, audit_special_queryset_writes=True)
+class SafetyLayer(BaseTeamModel):
+    objects = SafetyLayerObjectManager()
     prompt = models.ForeignKey(Prompt, on_delete=models.CASCADE)
     messages_to_review = models.CharField(
-        choices=REVIEW_CHOICES,
-        default="human",
+        choices=ChatMessageType.safety_layer_choices,
+        default=ChatMessageType.HUMAN,
         help_text="Whether the prompt should be applied to human or AI messages",
         max_length=10,
     )
@@ -89,7 +123,7 @@ class SafetyLayer(BaseModel):
         return str(self.prompt)
 
 
-class Survey(BaseModel):
+class Survey(BaseTeamModel):
     """
     A survey.
     """
@@ -103,6 +137,9 @@ class Survey(BaseModel):
         max_length=500,
     )
 
+    class Meta:
+        ordering = ["name"]
+
     def __str__(self):
         return self.name
 
@@ -115,16 +152,37 @@ class Survey(BaseModel):
         )
 
 
-class ConsentForm(BaseModel):
+@audit_fields(*model_audit_fields.CONSENT_FORM_FIELDS, audit_special_queryset_writes=True)
+class ConsentForm(BaseTeamModel):
     """
     Custom markdown consent form to be used by experiments.
     """
 
+    objects = ConsentFormObjectManager()
     name = models.CharField(max_length=50)
     consent_text = models.TextField(help_text="Custom markdown text")
+    capture_identifier = models.BooleanField(default=True)
+    identifier_label = models.CharField(max_length=200, default="Email Address")
+    identifier_type = models.CharField(choices=(("email", "Email"), ("text", "Text")), default="email", max_length=16)
+    is_default = models.BooleanField(default=False, editable=False)
+    confirmation_text = models.CharField(
+        null=False,
+        default="Respond with '1' if you agree",
+        help_text=("Use this text to tell the user to respond with '1' in order to give their consent"),
+    )
+
+    class Meta:
+        ordering = ["name"]
+
+    @classmethod
+    def get_default(cls, team):
+        return cls.objects.get(team=team, is_default=True)
 
     def __str__(self):
         return self.name
+
+    def get_rendered_content(self):
+        return markdown.markdown(self.consent_text)
 
 
 class SyntheticVoice(BaseModel):
@@ -141,28 +199,45 @@ class SyntheticVoice(BaseModel):
         ("male (child)", "Male (Child)"),
         ("female (child)", "Female (Child)"),
     )
+
+    AWS = "AWS"
+    Azure = "Azure"
+
+    SERVICES = (
+        ("AWS", AWS),
+        ("Azure", Azure),
+    )
+
     name = models.CharField(
         max_length=64, help_text="The name of the synthetic voice, as per the documentation of the service"
     )
     neural = models.BooleanField(default=False, help_text="Indicates whether this voice is a neural voice")
     language = models.CharField(null=False, blank=False, max_length=64, help_text="The language this voice is for")
+    language_code = models.CharField(
+        null=False, blank=False, max_length=32, help_text="The language code this voice is for"
+    )
+
     gender = models.CharField(
         null=False, blank=False, choices=GENDERS, max_length=14, help_text="The gender of this voice"
     )
+    service = models.CharField(
+        null=False, blank=False, choices=SERVICES, max_length=6, help_text="The service this voice is from"
+    )
+
+    class Meta:
+        ordering = ["name"]
+        unique_together = ("name", "language_code", "language", "gender", "neural", "service")
 
     def get_gender(self):
         # This is a bit of a hack to display the gender on the admin screen. Directly calling gender doesn't work
         return self.gender
 
-    class Meta:
-        unique_together = ("name", "language", "gender", "neural")
-
     def __str__(self):
         prefix = "*" if self.neural else ""
-        return f"{self.language}, {self.gender}, {prefix}{self.name}"
+        return f"{self.language}, {self.gender}: {prefix}{self.name}"
 
 
-class NoActivityMessageConfig(BaseModel):
+class NoActivityMessageConfig(BaseTeamModel):
     """Configuration for when the user doesn't respond to the bot's message"""
 
     message_for_bot = models.CharField(help_text="This message will be sent to the LLM along with the message history")
@@ -170,27 +245,35 @@ class NoActivityMessageConfig(BaseModel):
     max_pings = models.IntegerField()
     ping_after = models.IntegerField(help_text="The amount of minutes after which to ping the user. Minimum 1.")
 
+    class Meta:
+        ordering = ["name"]
+
     def __str__(self):
         return self.name
 
 
-class Experiment(BaseModel):
+@audit_fields(*model_audit_fields.EXPERIMENT_FIELDS, audit_special_queryset_writes=True)
+class Experiment(BaseTeamModel):
     """
     An experiment combines a chatbot prompt, a safety prompt, and source material.
     Each experiment can be run as a chatbot.
     """
 
-    LLM_CHOICES = (
-        ("gpt-3.5-turbo", "GPT 3.5 (Chat GPT)"),
-        ("gpt-4", "GPT 4"),
-    )
+    objects = ExperimentObjectManager()
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     name = models.CharField(max_length=50)
     description = models.TextField(null=True, default="", verbose_name="A longer description of the experiment.")
-    llm = models.CharField(max_length=20, choices=LLM_CHOICES, default="gpt-3.5-turbo")
+    llm_provider = models.ForeignKey(
+        "service_providers.LlmProvider", on_delete=models.SET_NULL, null=True, blank=True, verbose_name="LLM Provider"
+    )
+    llm = models.CharField(
+        max_length=20,
+        help_text="The LLM model to use.",
+        verbose_name="LLM Model",
+    )
     temperature = models.FloatField(default=0.7, validators=[MinValueValidator(0), MaxValueValidator(1)])
     chatbot_prompt = models.ForeignKey(Prompt, on_delete=models.CASCADE, related_name="experiments")
-    safety_layers = models.ManyToManyField(SafetyLayer, related_name="experiments")
+    safety_layers = models.ManyToManyField(SafetyLayer, related_name="experiments", blank=True)
     is_active = models.BooleanField(
         default=True, help_text="If unchecked, this experiment will be hidden from everyone besides the owner."
     )
@@ -224,11 +307,16 @@ class Experiment(BaseModel):
     public_id = models.UUIDField(default=uuid.uuid4, unique=True)
     consent_form = models.ForeignKey(
         ConsentForm,
-        null=True,
-        blank=True,
         on_delete=models.CASCADE,
         related_name="experiments",
-        help_text="If set, this consent form will be used instead of the default one.",
+        help_text="Consent form content to show to users before participation in experiments.",
+    )
+    voice_provider = models.ForeignKey(
+        "service_providers.VoiceProvider",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name="Voice Provider",
     )
     synthetic_voice = models.ForeignKey(
         SyntheticVoice, null=True, blank=True, related_name="experiments", on_delete=models.SET_NULL
@@ -240,20 +328,47 @@ class Experiment(BaseModel):
         on_delete=models.SET_NULL,
         help_text="This is an experimental feature and might exhibit undesirable behaviour for external channels",
     )
+    conversational_consent_enabled = models.BooleanField(
+        default=False,
+        help_text=(
+            "If enabled, the consent form will be sent at the start of a conversation for external channels. Note: "
+            "This requires the experiment to have a seed message."
+        ),
+    )
+
+    class Meta:
+        ordering = ["name"]
+        permissions = [
+            ("invite_participants", "Invite experiment participants"),
+            ("download_chats", "Download experiment chats"),
+        ]
 
     def __str__(self):
         return self.name
 
+    def get_chat_model(self):
+        service = self.llm_provider.get_llm_service()
+        return service.get_chat_model(self.llm, self.temperature)
+
+    def get_absolute_url(self):
+        return reverse("experiments:single_experiment_home", args=[self.team.slug, self.id])
+
 
 class Participant(BaseTeamModel):
-    email = models.EmailField()
+    identifier = models.CharField(max_length=320, blank=True)  # max email length
     public_id = models.UUIDField(default=uuid.uuid4, unique=True)
 
+    @property
+    def email(self):
+        validate_email(self.identifier)
+        return self.identifier
+
     def __str__(self):
-        return self.email
+        return self.identifier
 
     class Meta:
-        unique_together = ("team", "email")
+        ordering = ["identifier"]
+        unique_together = ("team", "identifier")
 
 
 class SessionStatus(models.TextChoices):
@@ -267,12 +382,10 @@ class SessionStatus(models.TextChoices):
     UNKNOWN = "unknown", gettext("Unknown")
 
 
-class ExperimentSession(BaseModel):
+class ExperimentSession(BaseTeamModel):
     """
     An individual session, e.g. an instance of a chat with an experiment
     """
-
-    team = models.ForeignKey(Team, verbose_name=gettext("Team"), on_delete=models.CASCADE, null=True, blank=True)
 
     public_id = models.UUIDField(default=uuid.uuid4, unique=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True)
@@ -284,18 +397,30 @@ class ExperimentSession(BaseModel):
 
     experiment = models.ForeignKey(Experiment, on_delete=models.CASCADE, related_name="sessions")
     chat = models.OneToOneField(Chat, related_name="experiment_session", on_delete=models.CASCADE)
-    llm = models.CharField(max_length=20, choices=Experiment.LLM_CHOICES, default="gpt-3.5-turbo")
+    llm = models.CharField(max_length=20)
     seed_task_id = models.CharField(
         max_length=40, blank=True, default="", help_text="System ID of the seed message task, if present."
     )
     no_activity_ping_count = models.IntegerField(default=0, null=False, blank=False)
+    external_chat_id = models.CharField(null=False)
+    experiment_channel = models.ForeignKey(
+        "channels.ExperimentChannel",
+        on_delete=models.CASCADE,
+        related_name="experiment_sessions",
+        null=True,
+        blank=True,
+    )
 
     class Meta:
         ordering = ["created_at"]
 
     def save(self, *args, **kwargs):
         if not hasattr(self, "chat"):
-            self.chat = Chat.objects.create(user=self.user, name=self.experiment.name)
+            self.chat = Chat.objects.create(team=self.team, user=self.user, name=self.experiment.name)
+
+        is_web_channel = self.experiment_channel and self.experiment_channel.platform == "web"
+        if is_web_channel and self.external_chat_id is None:
+            self.external_chat_id = self.chat.id
         super().save(*args, **kwargs)
 
     def has_display_messages(self) -> bool:
@@ -322,12 +447,27 @@ class ExperimentSession(BaseModel):
             )
         )
 
+    def user_already_engaged(self) -> bool:
+        return ChatMessage.objects.filter(chat=self.chat, message_type=ChatMessageType.HUMAN).exists()
+
+    def get_platform_name(self) -> str:
+        return self.experiment_channel.get_platform_display()
+
     def get_pre_survey_link(self):
         return self.experiment.pre_survey.get_link(self.participant, self)
 
     def get_post_survey_link(self):
         return self.experiment.post_survey.get_link(self.participant, self)
 
-    def get_channel_session(self):
-        if hasattr(self, "channel_session"):
-            return self.channel_session
+    def is_stale(self) -> bool:
+        """A Channel Session is considered stale if the experiment that the channel points to differs from the
+        one that the experiment session points to. This will happen when the user repurposes the channel to point
+        to another experiment."""
+        return self.experiment_channel.experiment != self.experiment
+
+    def is_complete(self):
+        return self.status == SessionStatus.COMPLETE
+
+    def update_status(self, new_status: SessionStatus):
+        self.status = new_status
+        self.save()

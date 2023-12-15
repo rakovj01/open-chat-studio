@@ -42,6 +42,7 @@ DJANGO_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
+    "django.contrib.humanize",
     "django.contrib.sessions",
     "django.contrib.sitemaps",
     "django.contrib.messages",
@@ -67,6 +68,9 @@ THIRD_PARTY_APPS = [
     "hijack.contrib.admin",  # hijack buttons in the admin
     "whitenoise.runserver_nostatic",  # whitenoise runserver
     "waffle",
+    "django_celery_beat",
+    "django_tables2",
+    "field_audit",
 ]
 
 # Put your project-specific apps here
@@ -78,6 +82,10 @@ PROJECT_APPS = [
     "apps.web",
     "apps.teams.apps.TeamConfig",
     "apps.channels",
+    "apps.llm_providers",
+    "apps.service_providers",
+    "apps.analysis",
+    "apps.generics",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + PROJECT_APPS
@@ -86,17 +94,20 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "allauth.account.middleware.AccountMiddleware",
     "django.middleware.locale.LocaleMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django_otp.middleware.OTPMiddleware",
     "apps.teams.middleware.TeamsMiddleware",
+    "apps.web.scope_middleware.RequestContextMiddleware",
     "apps.web.locale_middleware.UserLocaleMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "hijack.middleware.HijackUserMiddleware",
     "waffle.middleware.WaffleMiddleware",
+    "field_audit.middleware.FieldAuditMiddleware",
 ]
 
 
@@ -203,8 +214,8 @@ ACCOUNT_EMAIL_VERIFICATION = env("ACCOUNT_EMAIL_VERIFICATION", default="none")
 ALLAUTH_2FA_ALWAYS_REVEAL_BACKUP_TOKENS = False
 
 AUTHENTICATION_BACKENDS = (
-    # Needed to login by username in Django admin, regardless of `allauth`
-    "django.contrib.auth.backends.ModelBackend",
+    # login etc. + team membership based permissions
+    "apps.teams.backends.TeamBackend",
     # `allauth` specific authentication methods, such as login by e-mail
     "allauth.account.auth_backends.AuthenticationBackend",
 )
@@ -230,7 +241,7 @@ USE_TZ = True
 
 
 # Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/3.2/howto/static-files/
+# https://docs.djangoproject.com/en/4.2/ref/contrib/staticfiles/
 
 STATIC_ROOT = BASE_DIR / "static_root"
 STATIC_URL = "/static/"
@@ -239,33 +250,56 @@ STATICFILES_DIRS = [
     BASE_DIR / "static",
 ]
 
-# uncomment to use manifest storage to bust cache when file change
-# note: this may break some image references in sass files which is why it is not enabled by default
-# STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
-STATICFILES_STORAGE = "whitenoise.storage.CompressedStaticFilesStorage"
+
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "public": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+    },
+}
+
+# File storage: https://docs.djangoproject.com/en/4.2/topics/files/
 
 MEDIA_ROOT = BASE_DIR / "media"
 MEDIA_URL = "/media/"
 
-USE_S3_MEDIA = env.bool("USE_S3_MEDIA", default=False)
-if USE_S3_MEDIA:
-    # Media file storage in S3
-    # Using this will require configuration of the S3 bucket
-    AWS_ACCESS_KEY_ID = env("AWS_ACCESS_KEY_ID", default="")
+AWS_ACCESS_KEY_ID = env("AWS_ACCESS_KEY_ID", default=None)
+if AWS_ACCESS_KEY_ID:
     AWS_SECRET_ACCESS_KEY = env("AWS_SECRET_ACCESS_KEY")
-    AWS_STORAGE_BUCKET_NAME = env("AWS_STORAGE_BUCKET_NAME", default="gpt_playground-media")
-    AWS_S3_CUSTOM_DOMAIN = f"{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com"
-    PUBLIC_MEDIA_LOCATION = "media"
-    MEDIA_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/{PUBLIC_MEDIA_LOCATION}/"
-    DEFAULT_FILE_STORAGE = "apps.web.storage_backends.PublicMediaStorage"
+    AWS_S3_REGION = env("AWS_S3_REGION", default=None)
+    WHATSAPP_S3_AUDIO_BUCKET = env("WHATSAPP_AWS_AUDIO_BUCKET", default="ocs-whatsapp-voice")
+
+    USE_S3_STORAGE = env.bool("USE_S3_STORAGE", default=False)
+    if USE_S3_STORAGE:
+        # match names in django-storages
+        AWS_S3_ACCESS_KEY_ID = AWS_ACCESS_KEY_ID
+        AWS_S3_REGION_NAME = AWS_S3_REGION
+
+        # use private storage by default
+        STORAGES["default"] = {
+            "BACKEND": "apps.web.storage_backends.PrivateMediaStorage",
+            "OPTIONS": {
+                "bucket_name": env("AWS_PRIVATE_STORAGE_BUCKET_NAME", default="ocs-resources"),
+                "location": "resources",
+            },
+        }
+
+        # public storge for media files e.g. user profile pictures
+        AWS_PUBLIC_STORAGE_BUCKET_NAME = env("AWS_PUBLIC_STORAGE_BUCKET_NAME", default="ocs-media")
+        PUBLIC_MEDIA_LOCATION = "media"
+        MEDIA_URL = f"https://{AWS_PUBLIC_STORAGE_BUCKET_NAME}.s3.amazonaws.com/{PUBLIC_MEDIA_LOCATION}/"
+        STORAGES["public"] = {
+            "BACKEND": "apps.web.storage_backends.PublicMediaStorage",
+            "OPTIONS": {"bucket_name": AWS_PUBLIC_STORAGE_BUCKET_NAME, "location": PUBLIC_MEDIA_LOCATION},
+        }
 
 # Default primary key field type
-# https://docs.djangoproject.com/en/3.2/ref/settings/#default-auto-field
-
-# future versions of Django will use BigAutoField as the default, but it can result in unwanted library
-# migration files being generated, so we stick with AutoField for now.
-# change this to BigAutoField if you're sure you want to use it and aren't worried about migrations.
-DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Email setup
 
@@ -302,9 +336,6 @@ SPECTACULAR_SETTINGS = {
     "SWAGGER_UI_SETTINGS": {
         "displayOperationId": True,
     },
-    "PREPROCESSING_HOOKS": [
-        "apps.api.schema.filter_schema_apis",
-    ],
     "APPEND_COMPONENTS": {
         "securitySchemes": {"ApiKeyAuth": {"type": "apiKey", "in": "header", "name": "Authorization"}}
     },
@@ -330,12 +361,10 @@ if REDIS_URL.startswith("rediss"):
 
 import os
 
-CELERY_BROKER_URL = os.environ.get("REDIS_URL", "")
-CELERY_RESULT_BACKEND = os.environ.get("REDIS_URL", "")
-WAGTAILADMIN_BASE_URL = "http://localhost:8000"
+CELERY_BROKER_URL = CELERY_RESULT_BACKEND = REDIS_URL
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
 # Waffle config
-
 WAFFLE_FLAG_MODEL = "teams.Flag"
 
 # replace any values below with specifics for your project
@@ -345,6 +374,8 @@ PROJECT_METADATA = {
     "DESCRIPTION": gettext_lazy("Experiments with AI, GPT and LLMs"),
     "CONTACT_EMAIL": "devops+openchatstudio@dimagi.com",
     "IMAGE": "https://chatbots.dimagi.com/static/images/dimagi-logo.png",
+    "TERMS_URL": env("TERMS_URL", default=""),
+    "PRIVACY_POLICY_URL": env("PRIVACY_POLICY_URL", default=""),
 }
 
 USE_HTTPS_IN_ABSOLUTE_URLS = False  # set this to True in production to have URLs generated with https instead of http
@@ -354,14 +385,6 @@ ADMINS = [("Dimagi Admins", "devops+openchatstudio@dimagi.com")]
 # Add your google analytics ID to the environment to connect to Google Analytics
 GOOGLE_ANALYTICS_ID = env("GOOGLE_ANALYTICS_ID", default="")
 
-
-# OpenAI setup
-
-OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
-
-# where chroma DBs get persisted
-CHROMA_DB_DIRECTORY = BASE_DIR / "data" / "dbs"
-
 # Sentry setup
 
 # populate this to configure sentry. should take the form: 'https://****@sentry.io/12345'
@@ -370,9 +393,33 @@ SENTRY_DSN = env("SENTRY_DSN", default="")
 
 if SENTRY_DSN:
     import sentry_sdk
+    from sentry_sdk.integrations.celery import CeleryIntegration
     from sentry_sdk.integrations.django import DjangoIntegration
 
-    sentry_sdk.init(dsn=SENTRY_DSN, integrations=[DjangoIntegration()])
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        integrations=[
+            DjangoIntegration(),
+            CeleryIntegration(),
+        ],
+    )
+
+
+# Taskbadger setup
+TASKBADGER_ORG = env("TASKBADGER_ORG", default=None)
+TASKBADGER_PROJECT = env("TASKBADGER_PROJECT", default=None)
+TASKBADGER_API_KEY = env("TASKBADGER_API_KEY", default=None)
+
+if TASKBADGER_ORG and TASKBADGER_PROJECT and TASKBADGER_API_KEY:
+    import taskbadger
+    from taskbadger.systems.celery import CelerySystemIntegration
+
+    taskbadger.init(
+        organization_slug=TASKBADGER_ORG,
+        project_slug=TASKBADGER_PROJECT,
+        token=TASKBADGER_API_KEY,
+        systems=[CelerySystemIntegration(excludes=["apps.chat.tasks.periodic_tasks"])],
+    )
 
 
 LOGGING = {
@@ -406,17 +453,24 @@ LOGGING = {
 }
 
 # Telegram webhook config
-TELEGRAM_SECRET_TOKEN = os.environ.get("TELEGRAM_SECRET_TOKEN", default="123")
+TELEGRAM_SECRET_TOKEN = env("TELEGRAM_SECRET_TOKEN", default="")
 
-# AWS Polly
-AWS_POLLY_ACCESS_KEY_ID = os.environ.get("AWS_POLLY_ACCESS_KEY_ID", default="")
-AWS_POLLY_SECRET_KEY = os.environ.get("AWS_POLLY_SECRET_KEY", default="")
-AWS_POLLY_REGION = os.environ.get("AWS_POLLY_REGION", default="ap-south-1")
+# Django tables
 
-WHATSAPP_AWS_ACCESS_KEY_ID = AWS_POLLY_ACCESS_KEY_ID
-WHATSAPP_AWS_SECRET_KEY = AWS_POLLY_SECRET_KEY
-WHATSAPP_AWS_REGION = AWS_POLLY_REGION
-WHATSAPP_AWS_AUDIO_BUCKET = os.environ.get("WHATSAPP_AWS_AUDIO_BUCKET", default="dimagi-rad-ocs")
+DJANGO_TABLES2_TEMPLATE = "table/tailwind.html"
+DJANGO_TABLES2_TABLE_ATTRS = {
+    "class": "w-full table-fixed",
+    "thead": {"class": "bg-gray-200 text-gray-600 uppercase text-sm leading-normal"},
+    "th": {"class": "py-3 px-6 text-left"},
+    "td": {"class": "py-3 px-6 text-left overflow-hidden"},
+}
+DJANGO_TABLES2_ROW_ATTRS = {
+    "class": "border-b border-gray-200 hover:bg-gray-100",
+    "id": lambda record: f"record-{record.id}",
+}
 
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
+# This is only used for development purposes
+SITE_URL_ROOT = env("SITE_URL_ROOT", default=None)
+
+# Encryption
+CRYPTOGRAPHY_SALT = env("CRYPTOGRAPHY_SALT", default=None)

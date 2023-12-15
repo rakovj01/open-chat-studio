@@ -5,3 +5,9 @@ black
 isort
 mock
 freezegun
+invoke
+termcolor
+watchfiles
+pytest
+pytest-django
+factory-boy

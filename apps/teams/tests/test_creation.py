@@ -1,8 +1,12 @@
 from django.test import TestCase
+from django.urls import reverse
 
+from apps.teams.backends import SUPER_ADMIN_GROUP
 from apps.teams.helpers import create_default_team_for_user
+from apps.teams.models import Membership
 from apps.teams.roles import is_admin
 from apps.users.models import CustomUser
+from apps.utils.factories.user import UserFactory
 
 
 class TeamCreationTest(TestCase):
@@ -16,3 +20,16 @@ class TeamCreationTest(TestCase):
         self.assertEqual("Alice", team.name)
         self.assertEqual("alice", team.slug)
         self.assertTrue(is_admin(user, team))
+        membership = team.membership_set.filter(user=user).first()
+        self.assertEqual([SUPER_ADMIN_GROUP], [group.name for group in membership.groups.all()])
+
+
+def test_create_team_view(db, client):
+    """Test to make sure that user is assigned as group owner when they create a team"""
+    user = UserFactory()
+    client.force_login(user)
+    response = client.post(reverse("teams:create_team"), {"name": "Team name", "slug": "team"})
+
+    membership = Membership.objects.filter(team__slug="team").first()
+    perission_group = membership.groups.first()
+    assert perission_group.name == SUPER_ADMIN_GROUP

@@ -3,37 +3,34 @@ from typing import Dict
 from django.contrib import admin
 from django.http.request import HttpRequest
 
-from apps.channels.models import ChannelSession, ExperimentChannel
+from apps.channels.models import ExperimentChannel
 
 
 @admin.register(ExperimentChannel)
 class ExperimentChannelAdmin(admin.ModelAdmin):
     list_display = (
         "name",
+        "team",
         "platform",
         "active",
+        "external_id",
     )
-    search_fields = ("name",)
+    search_fields = ("name", "external_id")
     list_filter = (
+        "platform",
         "created_at",
         "updated_at",
     )
     readonly_fields = (
+        "external_id",
         "created_at",
         "updated_at",
     )
+
+    @admin.display(description="Team")
+    def team(self, obj):
+        if obj.experiment:
+            return obj.experiment.team.name
 
     def get_changeform_initial_data(self, request: HttpRequest) -> Dict[str, str]:
         return {"extra_data": {"bot_token": "your token here"}}
-
-    def get_queryset(self, request):
-        queryset = super().get_queryset(request)
-        return queryset.exclude(platform="web")
-
-
-@admin.register(ChannelSession)
-class ChannelSessionAdmin(admin.ModelAdmin):
-    readonly_fields = (
-        "created_at",
-        "updated_at",
-    )

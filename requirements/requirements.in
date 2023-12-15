@@ -2,22 +2,25 @@ boto3
 Django
 django-allauth
 django-allauth-2fa
+django-tables2
 django-waffle
 psycopg2-binary
+django-cryptography
 django-environ
 djangorestframework
 djangorestframework-api-key
 drf-spectacular
-django-anymail[mailgun]  # email services
+django-anymail
 django-hijack
-django-storages
+django-storages[s3]
 celery-progress
 celery
 celery[redis]
 openai
+pandas
 sentry-sdk
 whitenoise[brotli]
-langchain==0.0.260
+langchain
 Markdown
 # unstructured  # langchain loaders
 # chromadb  # langchain queries
@@ -26,4 +29,9 @@ pyTelegramBotAPI==4.12.0
 pydub # Audio transcription
 ffmpeg # Audio transcription
 twilio
-pydantic==1.10.7
+pydantic
+django_celery_beat
+azure-cognitiveservices-speech
+taskbadger
+fbmessenger
+django-field-audit

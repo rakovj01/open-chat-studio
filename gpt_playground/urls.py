@@ -35,6 +35,8 @@ team_urlpatterns = [
     path("", include(web_team_urls)),
     path("team/", include(single_team_urls)),
     path("experiments/", include("apps.experiments.urls")),
+    path("service_providers/", include("apps.service_providers.urls")),
+    path("analysis/", include("apps.analysis.urls")),
 ]
 
 urlpatterns = [

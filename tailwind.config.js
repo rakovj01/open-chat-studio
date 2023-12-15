@@ -4,6 +4,7 @@ module.exports = {
     './assets/**/*.js',
     './assets/**/*.vue',
     './templates/**/*.html',
+    './gpt_playground/settings.py',
   ],
   safelist: [
     'alert-success',
@@ -26,7 +27,6 @@ module.exports = {
     extend: {},
   },
   plugins: [
-    require('@tailwindcss/forms'),
     require('@tailwindcss/typography'),
     require("daisyui"),
   ],

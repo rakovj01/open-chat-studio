@@ -1,30 +1,30 @@
-import json
 import time
 from datetime import datetime
 
 from celery.app import shared_task
+from taskbadger.celery import Task as TaskbadgerTask
 
 from apps.channels.datamodels import WebMessage
 from apps.chat.bots import TopicBot
-from apps.chat.message_handlers import WebMessageHandler
+from apps.chat.channels import WebChannel
 from apps.experiments.models import ExperimentSession, Prompt, PromptBuilderHistory, SourceMaterial
+from apps.service_providers.models import LlmProvider
 from apps.users.models import CustomUser
+from apps.utils.taskbadger import update_taskbadger_data
 
 
-@shared_task
-def get_response_for_webchat_task(experiment_session_id: int, message_text: str) -> str:
+@shared_task(bind=True, base=TaskbadgerTask)
+def get_response_for_webchat_task(self, experiment_session_id: int, message_text: str) -> str:
     experiment_session = ExperimentSession.objects.get(id=experiment_session_id)
-    # Channel session should exist. We shoul run a data migration before this code
-    channel_session = experiment_session.get_channel_session()
-    message_handler = WebMessageHandler(channel_session.experiment_channel)
+    message_handler = WebChannel(experiment_session.experiment_channel)
     message = WebMessage(chat_id=experiment_session.chat.id, message_text=message_text)
+    update_taskbadger_data(self, message_handler, message)
     return message_handler.new_user_message(message)
 
 
 @shared_task
-def get_prompt_builder_response_task(user_id, data: str) -> str:
-    # Deserialize the incoming JSON
-    data_dict = json.loads(data)
+def get_prompt_builder_response_task(team_id: int, user_id, data_dict: dict) -> str:
+    llm_service = LlmProvider.objects.get(id=data_dict["provider"]).get_llm_service()
     messages_history = data_dict["messages"]
 
     user = CustomUser.objects.get(id=user_id)
@@ -50,15 +50,14 @@ def get_prompt_builder_response_task(user_id, data: str) -> str:
     bot = TopicBot(
         prompt=dummy_prompt,
         source_material=sourece_material_material,
-        model_name=data_dict["model"],
-        temperature=float(data_dict["temperature"]),
+        llm=llm_service.get_chat_model(data_dict["model"], float(data_dict["temperature"])),
         safety_layers=None,
         chat=None,
         messages_history=messages_history,
     )
 
     # Get the response from the bot using the last message from the user and return it
-    answer = bot.get_response(last_user_message)
+    answer = bot.process_input(last_user_message)
     input_tokens, output_tokens = bot.fetch_and_clear_token_count()
 
     # Push the user message back into the message list now that the bot response has arrived
@@ -84,5 +83,5 @@ def get_prompt_builder_response_task(user_id, data: str) -> str:
         }
     )
     history_event |= {"preview": answer, "time": datetime.now().time().strftime("%H:%M")}
-    PromptBuilderHistory.objects.create(owner=user, history=history_event)
+    PromptBuilderHistory.objects.create(team_id=team_id, owner=user, history=history_event)
     return {"message": answer, "input_tokens": input_tokens, "output_tokens": output_tokens}

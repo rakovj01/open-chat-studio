@@ -1,15 +1,19 @@
 from django import template
 
-from apps.teams.roles import is_admin, is_member
+from apps.teams.roles import is_admin
 
 register = template.Library()
 
 
-@register.filter
-def is_member_of(user, team):
-    return is_member(user, team)
+@register.simple_tag(takes_context=True)
+def has_perm(context, app_label, permission):
+    """Template tag to check dynamic permissions:
 
-
-@register.filter
-def is_admin_of(user, team):
-    return is_admin(user, team)
+    {% load team_tags %}
+    {% has_perm app_label perm_name as has_permission %}
+    {% if has_permission %}
+        ...
+    {% endif %}
+    """
+    request = context["request"]
+    return request.user.has_perm(f"{app_label}.{permission}")
