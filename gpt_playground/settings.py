@@ -73,7 +73,6 @@ THIRD_PARTY_APPS = [
     "field_audit",
 ]
 
-# Put your project-specific apps here
 PROJECT_APPS = [
     "apps.users.apps.UserConfig",
     "apps.api.apps.APIConfig",
@@ -86,6 +85,8 @@ PROJECT_APPS = [
     "apps.service_providers",
     "apps.analysis",
     "apps.generics",
+    "apps.assistants",
+    "apps.files",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + PROJECT_APPS
@@ -108,6 +109,7 @@ MIDDLEWARE = [
     "hijack.middleware.HijackUserMiddleware",
     "waffle.middleware.WaffleMiddleware",
     "field_audit.middleware.FieldAuditMiddleware",
+    "apps.web.htmx_middleware.HtmxMessageMiddleware",
 ]
 
 
@@ -190,9 +192,11 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 # Allauth setup
-ACCOUNT_ADAPTER = "apps.users.adapter.NoNewUsersAccountAdapter"
-if env("SIGNUP_ENABLED", default=False):
+SIGNUP_ENABLED = env("SIGNUP_ENABLED", default=False)
+if SIGNUP_ENABLED:
     ACCOUNT_ADAPTER = "apps.teams.adapter.AcceptInvitationAdapter"
+else:
+    ACCOUNT_ADAPTER = "apps.users.adapter.NoNewUsersAccountAdapter"
 ACCOUNT_AUTHENTICATION_METHOD = "email"
 ACCOUNT_EMAIL_REQUIRED = True
 ACCOUNT_EMAIL_SUBJECT_PREFIX = ""
@@ -214,6 +218,8 @@ ACCOUNT_EMAIL_VERIFICATION = env("ACCOUNT_EMAIL_VERIFICATION", default="none")
 ALLAUTH_2FA_ALWAYS_REVEAL_BACKUP_TOKENS = False
 
 AUTHENTICATION_BACKENDS = (
+    # check permissions exist (DEBUG only)
+    "apps.teams.backends.PermissionCheckBackend",
     # login etc. + team membership based permissions
     "apps.teams.backends.TeamBackend",
     # `allauth` specific authentication methods, such as login by e-mail
@@ -234,8 +240,6 @@ LOCALE_PATHS = (BASE_DIR / "locale",)
 TIME_ZONE = "UTC"
 
 USE_I18N = True
-
-USE_L10N = True
 
 USE_TZ = True
 
@@ -366,6 +370,7 @@ CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
 # Waffle config
 WAFFLE_FLAG_MODEL = "teams.Flag"
+WAFFLE_CREATE_MISSING_FLAGS = True
 
 # replace any values below with specifics for your project
 PROJECT_METADATA = {
@@ -440,9 +445,9 @@ LOGGING = {
             "handlers": ["console"],
             "level": env("DJANGO_LOG_LEVEL", default="INFO"),
         },
-        "gpt_playground": {
+        "ocs": {
             "handlers": ["console"],
-            "level": env("GPT_PLAYGROUND_LOG_LEVEL", default="INFO"),
+            "level": env("GPT_PLAYGROUND_LOG_LEVEL", default="DEBUG" if DEBUG else "INFO"),
         },
         "django.request": {  # Add this logger for request-related errors
             "handlers": ["console"],
@@ -460,10 +465,11 @@ TELEGRAM_SECRET_TOKEN = env("TELEGRAM_SECRET_TOKEN", default="")
 DJANGO_TABLES2_TEMPLATE = "table/tailwind.html"
 DJANGO_TABLES2_TABLE_ATTRS = {
     "class": "w-full table-fixed",
-    "thead": {"class": "bg-gray-200 text-gray-600 uppercase text-sm leading-normal"},
-    "th": {"class": "py-3 px-6 text-left"},
-    "td": {"class": "py-3 px-6 text-left overflow-hidden"},
+    "thead": {"class": "bg-base-200 base-content uppercase text-sm leading-normal"},
+    "th": {"class": "py-3 px-3 text-left"},
+    "td": {"class": "py-3 px-3 text-left overflow-hidden"},
 }
+# text-neutral text-error (pipeline run table styles here for tailwind build)
 DJANGO_TABLES2_ROW_ATTRS = {
     "class": "border-b border-gray-200 hover:bg-gray-100",
     "id": lambda record: f"record-{record.id}",

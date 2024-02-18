@@ -1,14 +1,16 @@
+from django.contrib import messages
 from django.contrib.auth.decorators import permission_required
 from django.contrib.auth.mixins import PermissionRequiredMixin
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.response import TemplateResponse
 from django.urls import reverse
+from django.views.decorators.http import require_POST
 from django.views.generic import CreateView, UpdateView
 from django_tables2 import SingleTableView
 
 from apps.analysis.forms import AnalysisForm
-from apps.analysis.models import Analysis, Resource, RunGroup
+from apps.analysis.models import Analysis, Resource, RunGroup, RunStatus
 from apps.analysis.pipelines import get_dynamic_forms_for_analysis, get_static_forms_for_analysis
 from apps.analysis.tables import AnalysisTable, RunGroupTable
 from apps.analysis.tasks import run_analysis
@@ -112,7 +114,7 @@ class CreateAnalysisPipeline(CreateView, PermissionRequiredMixin):
     def extra_context(self):
         return {
             "title": "Create Analysis Pipeline",
-            "button_text": "Create",
+            "button_text": "Continue",
             "active_tab": "analysis",
             "form_attrs": {"x-data": "analysis"},
             "llm_options": get_llm_provider_choices(self.request.team),
@@ -123,9 +125,7 @@ class CreateAnalysisPipeline(CreateView, PermissionRequiredMixin):
 
     def get_success_url(self):
         slug = self.request.team.slug
-        if self.object.needs_configuration():
-            return reverse("analysis:configure", args=[slug, self.object.id])
-        return reverse("analysis:home", args=[slug])
+        return reverse("analysis:configure", args=[slug, self.object.id])
 
     def form_valid(self, form):
         form.instance.team = self.request.team
@@ -155,6 +155,8 @@ class EditAnalysisPipeline(UpdateView, PermissionRequiredMixin):
         return Analysis.objects.filter(team=self.request.team)
 
     def get_success_url(self):
+        if self.request.POST.get("configure"):
+            return reverse("analysis:configure", args=[self.request.team.slug, self.object.id])
         return reverse("analysis:home", args=[self.request.team.slug])
 
 
@@ -163,6 +165,7 @@ class EditAnalysisPipeline(UpdateView, PermissionRequiredMixin):
 def delete_analysis(request, team_slug: str, pk: int):
     prompt = get_object_or_404(Analysis, id=pk, team=request.team)
     prompt.delete()
+    messages.success(request, "Pipeline Deleted")
     if request.headers.get("HX-Request"):
         return HttpResponse()
     else:
@@ -174,17 +177,21 @@ def delete_analysis(request, team_slug: str, pk: int):
 def create_analysis_run(request, team_slug: str, pk: int, run_id: int = None):
     analysis = get_object_or_404(Analysis, id=pk, team=request.team)
     param_forms = get_dynamic_forms_for_analysis(analysis)
+    initial = analysis.config or {}
     if request.method == "POST":
         forms = {
-            step_name: form(request, data=request.POST, files=request.FILES) for step_name, form in param_forms.items()
+            step_name: form(request, data=request.POST, files=request.FILES, initial=initial.get(step_name, {}))
+            for step_name, form in param_forms.items()
         }
         if all(form.is_valid() for form in forms.values()):
             step_params = {
-                step_name: form.save().model_dump(exclude_defaults=True) for step_name, form in forms.items()
+                step_name: {**analysis.config.get(step_name, {}), **form.save().model_dump(exclude_defaults=True)}
+                for step_name, form in forms.items()
             }
             group = RunGroup.objects.create(
                 team=analysis.team,
                 analysis=analysis,
+                created_by=request.user,
                 params=step_params,
             )
             result = run_analysis.delay(group.id)
@@ -192,7 +199,6 @@ def create_analysis_run(request, team_slug: str, pk: int, run_id: int = None):
             group.save()
             return redirect("analysis:group_details", team_slug=team_slug, pk=group.id)
     else:
-        initial = analysis.config or {}
         if run_id:
             run = get_object_or_404(RunGroup, id=run_id, team=request.team)
             initial = merge_raw_params(initial, run.params)
@@ -220,10 +226,36 @@ def replay_run(request, team_slug: str, pk: int):
 @permission_required("analysis.view_rungroup")
 def run_group_details(request, team_slug: str, pk: int):
     group = get_object_or_404(RunGroup, id=pk, team=request.team)
+    runs = list(group.analysisrun_set.all())
     return render(
         request,
         "analysis/run_group_details.html",
-        {"group": group, "runs": group.analysisrun_set.all()},
+        {"group": group, "runs": runs},
+    )
+
+
+@require_POST
+@login_and_team_required
+@permission_required("analysis.change_rungroup")
+def group_feedback(request, team_slug: str, pk: int):
+    group = get_object_or_404(RunGroup, id=pk, team=request.team)
+    if request.POST.get("action") == "approve_reset":
+        group.approved = None
+    if request.POST.get("action") == "approve":
+        group.approved = True
+    elif request.POST.get("action") == "reject":
+        group.approved = False
+    elif request.POST.get("action") == "star":
+        group.starred = True
+    elif request.POST.get("action") == "unstar":
+        group.starred = False
+    elif request.POST.get("action") == "note":
+        group.notes = request.POST.get("notes")
+    group.save()
+    return render(
+        request,
+        "analysis/components/group_feedback.html",
+        {"record": group, "for_details": request.GET.get("details") == "true"},
     )
 
 
@@ -231,8 +263,15 @@ def run_group_details(request, team_slug: str, pk: int):
 @permission_required("analysis.view_rungroup")
 def group_progress(request, team_slug: str, pk: int):
     group = get_object_or_404(RunGroup, id=pk, team=request.team)
-    runs = group.analysisrun_set.all()
+    if request.method == "POST" and request.POST.get("action") == "cancel":
+        group.status = RunStatus.CANCELLING
+        group.save()
+        group.analysisrun_set.filter(status__in=(RunStatus.PENDING, RunStatus.RUNNING)).update(
+            status=RunStatus.CANCELLED
+        )
+
     if not group.is_complete and group.task_id:
+        runs = group.analysisrun_set.all()
         return render(
             request,
             "analysis/components/group_progress_inner.html",
@@ -251,3 +290,15 @@ def download_resource(request, team_slug: str, pk: int):
         return FileResponse(file, as_attachment=True, filename=resource.file.name)
     except FileNotFoundError:
         raise Http404()
+
+
+@login_and_team_required
+@permission_required("analysis.delete_rungroup")
+def delete_run_group(request, team_slug: str, pk: int):
+    group = get_object_or_404(RunGroup, id=pk, team=request.team)
+    group.delete()
+    messages.success(request, "Run Deleted")
+    if request.headers.get("HX-Request"):
+        return HttpResponse()
+    else:
+        return redirect("analysis:details", team_slug=team_slug, pk=group.analysis_id)

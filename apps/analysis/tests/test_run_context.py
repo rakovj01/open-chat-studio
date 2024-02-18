@@ -8,11 +8,11 @@ from apps.service_providers.models import LlmProvider
 
 
 @pytest.fixture()
-def llm_provider(team):
+def llm_provider(team_with_users):
     return LlmProvider.objects.create(
         name="test",
         type="openai",
-        team=team,
+        team=team_with_users,
         config={
             "openai_api_key": "123123123",
         },
@@ -20,9 +20,9 @@ def llm_provider(team):
 
 
 @pytest.fixture()
-def analysis(team, llm_provider):
+def analysis(team_with_users, llm_provider):
     return Analysis.objects.create(
-        team=team,
+        team=team_with_users,
         name="test",
         source="test",
         llm_provider=llm_provider,
@@ -36,6 +36,7 @@ def mock_run_group():
     analysis.llm_provider.get_llm_service = mock.MagicMock()
     group = RunGroup(analysis=analysis, params={})
     group.save = mock.MagicMock()
+    group.refresh_from_db = mock.MagicMock()
     return group
 
 
@@ -43,11 +44,12 @@ def mock_run_group():
 def mock_analysis_run(mock_run_group):
     run = AnalysisRun(group=mock_run_group)
     run.save = mock.MagicMock()
+    run.refresh_from_db = mock.MagicMock()
     return run
 
 
 @pytest.mark.parametrize(
-    "params, expected",
+    ("params", "expected"),
     [
         ({}, {"llm_model": "test"}),
         ({"llm_model": "test2"}, {"llm_model": "test"}),
@@ -79,7 +81,7 @@ def test_run_context(mock_analysis_run):
 
 
 def test_run_context_error(mock_analysis_run):
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="test exception"):
         with run_context(mock_analysis_run):
             raise Exception("test exception")
 

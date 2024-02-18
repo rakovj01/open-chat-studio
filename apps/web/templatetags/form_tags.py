@@ -5,8 +5,12 @@ register = template.Library()
 
 
 @register.simple_tag
-def render_form_fields(form):
-    rendered_values = [render_field(form[field]) for field in form.fields]
+def render_form_fields(form, *fields):
+    if fields:
+        # preserve order
+        rendered_values = [render_field(form[field]) for field in fields]
+    else:
+        rendered_values = [render_field(form[field]) for field in form.fields]
     return mark_safe("".join(rendered_values))
 
 

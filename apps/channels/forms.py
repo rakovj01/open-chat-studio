@@ -35,15 +35,43 @@ class ChannelForm(forms.ModelForm):
         return super().save()
 
 
-class TelegramChannelForm(forms.Form):
+class ExtraFormBase(forms.Form):
+    def get_success_message(self, channel: ExperimentChannel):
+        pass
+
+
+class TelegramChannelForm(ExtraFormBase):
     bot_token = forms.CharField(label="Bot Token", max_length=100)
 
 
-class WhatsappChannelForm(forms.Form):
+class WhatsappChannelForm(ExtraFormBase):
     number = forms.CharField(label="Number", max_length=100)
+    webook_url = forms.CharField(
+        widget=forms.TextInput(attrs={"readonly": "readonly"}),
+        label="Webhook URL",
+        disabled=True,
+        required=False,
+        help_text="Use this as the URL when setting up the webhook",
+    )
+
+    def __init__(self, *args, **kwargs):
+        initial = kwargs.get("initial", {})
+        channel: ExperimentChannel = kwargs.pop("channel", None)
+        if channel:
+            initial["webook_url"] = channel.webhook_url
+            kwargs["initial"] = initial
+
+        super().__init__(*args, **kwargs)
+        if not channel:
+            # We only show the webhook URL field when there is something to show
+            self.fields["webook_url"].widget = forms.HiddenInput()
+
+    def get_success_message(self, channel: ExperimentChannel):
+        """The message to be displayed when the channel is successfully linked"""
+        return f"Use the following URL when setting up the webhook: {channel.webhook_url}"
 
 
-class FacebookChannelForm(forms.Form):
+class FacebookChannelForm(ExtraFormBase):
     page_id = forms.CharField(label="Page ID", max_length=100)
     page_access_token = forms.CharField(label="Page Access Token")
     verify_token = forms.CharField(

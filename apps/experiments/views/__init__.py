@@ -1,9 +1,9 @@
 from .consent import (  # noqa: F401
+    ConsentFormHome,
     ConsentFormTableView,
     CreateConsentForm,
+    DeleteConsentForm,
     EditConsentForm,
-    consent_form_home,
-    delete_consent_form,
 )
 from .experiment import (  # noqa: F401
     CreateExperiment,
@@ -33,37 +33,32 @@ from .experiment import (  # noqa: F401
 )
 from .no_activity import (  # noqa: F401
     CreateNoActivityMessageConfig,
+    DeleteNoActivityMessageConfig,
     EditNoActivityMessageConfig,
+    NoActivityMessageConfigHome,
     NoActivityMessageConfigTableView,
-    delete_no_activity_config,
-    no_activity_config_home,
 )
 from .prompt import (  # noqa: F401
-    CreatePrompt,
-    EditPrompt,
-    PromptTableView,
-    delete_prompt,
     experiments_prompt_builder,
     experiments_prompt_builder_get_message,
     get_prompt_builder_history,
     get_prompt_builder_message_response,
-    prompt_builder_load_prompts,
+    prompt_builder_load_experiments,
     prompt_builder_load_source_material,
     prompt_builder_start_save_process,
-    prompt_home,
 )
 from .safety import (  # noqa: F401
     CreateSafetyLayer,
+    DeleteSafetyLayer,
     EditSafetyLayer,
+    SafetyLayerHome,
     SafetyLayerTableView,
-    delete_safety_layer,
-    safety_layer_home,
 )
 from .source_material import (  # noqa: F401
     CreateSourceMaterial,
+    DeleteSourceMaterial,
     EditSourceMaterial,
+    SourceMaterialHome,
     SourceMaterialTableView,
-    delete_source_material,
-    source_material_home,
 )
-from .survey import CreateSurvey, EditSurvey, SurveyTableView, delete_survey, survey_home  # noqa: F401
+from .survey import CreateSurvey, DeleteSurvey, EditSurvey, SurveyHome, SurveyTableView  # noqa: F401

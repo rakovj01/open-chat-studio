@@ -2,6 +2,7 @@ import uuid
 
 import markdown
 from django.conf import settings
+from django.contrib.postgres.fields import ArrayField
 from django.core.validators import MaxValueValidator, MinValueValidator, validate_email
 from django.db import models
 from django.urls import reverse
@@ -36,35 +37,8 @@ class ConsentFormObjectManager(AuditingManager):
     pass
 
 
-@audit_fields(*model_audit_fields.PROMPT_FIELDS, audit_special_queryset_writes=True)
-class Prompt(BaseTeamModel):
-    """
-    A prompt - typically the starting point for ChatGPT.
-    """
-
-    objects = PromptObjectManager()
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    name = models.CharField(max_length=50)
-    description = models.TextField(blank=True, default="", verbose_name="A longer description of what the prompt does.")
-    prompt = models.TextField()
-    input_formatter = models.TextField(
-        blank=True,
-        default="",
-        help_text="Use the {input} variable somewhere to modify the user input before it reaches the bot. "
-        "E.g. 'Safe or unsafe? {input}'",
-    )
-
-    class Meta:
-        ordering = ["name"]
-
-    def __str__(self):
-        return self.name
-
-    def format(self, input_str):
-        if self.input_formatter:
-            return self.input_formatter.format(input=input_str)
-        else:
-            return input_str
+class NoActivityMessageConfigObjectManager(AuditingManager):
+    pass
 
 
 class PromptBuilderHistory(BaseTeamModel):
@@ -88,7 +62,7 @@ class SourceMaterial(BaseTeamModel):
     objects = SourceMaterialObjectManager()
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     topic = models.CharField(max_length=50)
-    description = models.TextField(null=True, default="", verbose_name="A longer description of the source material.")
+    description = models.TextField(null=True, default="", verbose_name="A longer description of the source material.")  # noqa DJ001
     material = models.TextField()
 
     class Meta:
@@ -101,7 +75,8 @@ class SourceMaterial(BaseTeamModel):
 @audit_fields(*model_audit_fields.SAFETY_LAYER_FIELDS, audit_special_queryset_writes=True)
 class SafetyLayer(BaseTeamModel):
     objects = SafetyLayerObjectManager()
-    prompt = models.ForeignKey(Prompt, on_delete=models.CASCADE)
+    name = models.CharField(max_length=50)
+    prompt_text = models.TextField()
     messages_to_review = models.CharField(
         choices=ChatMessageType.safety_layer_choices,
         default=ChatMessageType.HUMAN,
@@ -120,7 +95,7 @@ class SafetyLayer(BaseTeamModel):
     )
 
     def __str__(self):
-        return str(self.prompt)
+        return self.name
 
 
 class Survey(BaseTeamModel):
@@ -131,10 +106,22 @@ class Survey(BaseTeamModel):
     name = models.CharField(max_length=50)
     url = models.URLField(
         help_text=(
-            "Use the {participant_id}, {session_id} and {experiment_id} variables if you want to"
+            "Use the {participant_id}, {session_id} and {experiment_id} variables if you want to "
             "include the participant, session and experiment session ids in the url."
         ),
         max_length=500,
+    )
+    confirmation_text = models.TextField(
+        null=False,
+        default=(
+            "Before starting the experiment, we ask that you complete a short survey. Please click on the "
+            "survey link, fill it out, and, when you have finished, respond with '1' to let us know that"
+            "you've completed it. Survey link: {survey_link}"
+        ),
+        help_text=(
+            "Use this text to ask the user to complete the survey. The {survey_link} will contain the "
+            "link to the survey"
+        ),
     )
 
     class Meta:
@@ -237,9 +224,11 @@ class SyntheticVoice(BaseModel):
         return f"{self.language}, {self.gender}: {prefix}{self.name}"
 
 
+@audit_fields(*model_audit_fields.NO_ACTIVITY_CONFIG_FIELDS, audit_special_queryset_writes=True)
 class NoActivityMessageConfig(BaseTeamModel):
     """Configuration for when the user doesn't respond to the bot's message"""
 
+    objects = NoActivityMessageConfigObjectManager()
     message_for_bot = models.CharField(help_text="This message will be sent to the LLM along with the message history")
     name = models.CharField(max_length=64)
     max_pings = models.IntegerField()
@@ -262,17 +251,27 @@ class Experiment(BaseTeamModel):
     objects = ExperimentObjectManager()
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     name = models.CharField(max_length=50)
-    description = models.TextField(null=True, default="", verbose_name="A longer description of the experiment.")
+    description = models.TextField(null=True, default="", verbose_name="A longer description of the experiment.")  # noqa DJ001
     llm_provider = models.ForeignKey(
         "service_providers.LlmProvider", on_delete=models.SET_NULL, null=True, blank=True, verbose_name="LLM Provider"
     )
-    llm = models.CharField(
-        max_length=20,
-        help_text="The LLM model to use.",
-        verbose_name="LLM Model",
+    llm = models.CharField(max_length=20, help_text="The LLM model to use.", verbose_name="LLM Model", blank=True)
+    assistant = models.ForeignKey(
+        "assistants.OpenAiAssistant",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name="OpenAI Assistant",
     )
     temperature = models.FloatField(default=0.7, validators=[MinValueValidator(0), MaxValueValidator(1)])
-    chatbot_prompt = models.ForeignKey(Prompt, on_delete=models.CASCADE, related_name="experiments")
+
+    prompt_text = models.TextField(blank=True, default="")
+    input_formatter = models.TextField(
+        blank=True,
+        default="",
+        help_text="Use the {input} variable somewhere to modify the user input before it reaches the bot. "
+        "E.g. 'Safe or unsafe? {input}'",
+    )
     safety_layers = models.ManyToManyField(SafetyLayer, related_name="experiments", blank=True)
     is_active = models.BooleanField(
         default=True, help_text="If unchecked, this experiment will be hidden from everyone besides the owner."
@@ -281,7 +280,7 @@ class Experiment(BaseTeamModel):
         default=False,
         help_text=(
             "If checked, this bot will be able to use prebuilt tools (set reminders etc). This uses more tokens, "
-            "so it will cost more."
+            "so it will cost more. This doesn't currently work with Anthropic models."
         ),
     )
 
@@ -335,6 +334,19 @@ class Experiment(BaseTeamModel):
             "This requires the experiment to have a seed message."
         ),
     )
+    safety_violation_notification_emails = ArrayField(
+        models.CharField(max_length=512),
+        default=list,
+        verbose_name="Safety violation notification emails",
+        help_text="Email addresses to notify when the safety bot detects a violation. Separate addresses with a comma.",
+        null=True,
+        blank=True,
+    )
+    max_token_limit = models.PositiveIntegerField(
+        default=8192,
+        help_text="When the message history for a session exceeds this limit (in tokens), it will be compressed. "
+        "If 0, compression will be disabled which may result in errors or high LLM costs.",
+    )
 
     class Meta:
         ordering = ["name"]
@@ -347,8 +359,14 @@ class Experiment(BaseTeamModel):
         return self.name
 
     def get_chat_model(self):
-        service = self.llm_provider.get_llm_service()
+        service = self.get_llm_service()
         return service.get_chat_model(self.llm, self.temperature)
+
+    def get_llm_service(self):
+        if self.llm_provider:
+            return self.llm_provider.get_llm_service()
+        elif self.assistant:
+            return self.assistant.llm_provider.get_llm_service()
 
     def get_absolute_url(self):
         return reverse("experiments:single_experiment_home", args=[self.team.slug, self.id])

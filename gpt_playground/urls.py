@@ -19,7 +19,6 @@ from django.contrib import admin
 from django.contrib.sitemaps.views import sitemap
 from django.urls import include, path
 from django.views.generic import RedirectView
-from django.views.i18n import JavaScriptCatalog
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 
 from apps.teams.urls import team_urlpatterns as single_team_urls
@@ -37,6 +36,8 @@ team_urlpatterns = [
     path("experiments/", include("apps.experiments.urls")),
     path("service_providers/", include("apps.service_providers.urls")),
     path("analysis/", include("apps.analysis.urls")),
+    path("assistants/", include("apps.assistants.urls")),
+    path("files/", include("apps.files.urls")),
 ]
 
 urlpatterns = [
@@ -44,7 +45,6 @@ urlpatterns = [
     path("admin/login/", RedirectView.as_view(pattern_name="account_login")),
     path("admin/", admin.site.urls),
     path("i18n/", include("django.conf.urls.i18n")),
-    path("jsi18n/", JavaScriptCatalog.as_view(), name="javascript-catalog"),
     path("sitemap.xml", sitemap, {"sitemaps": sitemaps}, name="django.contrib.sitemaps.views.sitemap"),
     path("a/<slug:team_slug>/", include(team_urlpatterns)),
     path("accounts/", include("allauth_2fa.urls")),

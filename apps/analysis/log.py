@@ -3,7 +3,6 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from datetime import datetime
 from enum import IntEnum, auto
-from typing import TextIO
 
 
 class LogLevel(IntEnum):
@@ -12,13 +11,16 @@ class LogLevel(IntEnum):
     WARN = auto()
     ERROR = auto()
 
+    def is_debug(self):
+        return self == LogLevel.DEBUG
+
 
 @dataclasses.dataclass
 class LogEntry:
     level: LogLevel
     message: str
     logger: str = ""
-    timestamp: datetime = dataclasses.field(init=False, default_factory=datetime.utcnow)
+    timestamp: datetime = dataclasses.field(default_factory=datetime.utcnow)
 
     def __str__(self, fmt: str = None):
         return self.format("[{level}] [{logger}] ({ts}): {message}")
@@ -34,11 +36,37 @@ class LogEntry:
             "timestamp": self.timestamp.isoformat(timespec="milliseconds"),
         }
 
+    @classmethod
+    def from_json(cls, data):
+        return cls(
+            level=LogLevel[data["level"]],
+            message=data["message"],
+            logger=data["logger"],
+            timestamp=datetime.fromisoformat(data["timestamp"]),
+        )
+
+    def is_debug(self):
+        return self.level == LogLevel.DEBUG
+
+    def is_info(self):
+        return self.level == LogLevel.INFO
+
+    def is_warn(self):
+        return self.level == LogLevel.WARN
+
+    def is_error(self):
+        return self.level == LogLevel.ERROR
+
 
 class LogStream(ABC):
     @abstractmethod
     def write(self, entry: LogEntry):
         raise NotImplementedError
+
+
+class StdoutLogStream(LogStream):
+    def write(self, entry: LogEntry):
+        print(entry)
 
 
 class Logger:

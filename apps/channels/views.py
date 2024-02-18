@@ -21,9 +21,20 @@ def new_telegram_message(request, channel_external_id: uuid):
 
 
 @csrf_exempt
-def new_whatsapp_message(request):
+def new_twilio_message(request):
     message_data = json.dumps(request.POST.dict())
-    tasks.handle_whatsapp_message.delay(message_data)
+    tasks.handle_twilio_message.delay(message_data)
+    return HttpResponse()
+
+
+@csrf_exempt
+def new_turn_message(request, experiment_id: uuid):
+    message_data = json.loads(request.body.decode("utf-8"))
+    if "statuses" in message_data:
+        # Ignore status updates
+        return HttpResponse()
+
+    tasks.handle_turn_message.delay(experiment_id=experiment_id, message_data=message_data)
     return HttpResponse()
 
 

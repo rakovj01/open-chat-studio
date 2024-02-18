@@ -5,12 +5,11 @@ from apps.experiments.models import (
     ConsentForm,
     Experiment,
     NoActivityMessageConfig,
-    Prompt,
     SafetyLayer,
     SourceMaterial,
     Survey,
 )
-from apps.generics import table_actions
+from apps.generics import actions
 
 
 class ExperimentTable(tables.Table):
@@ -22,8 +21,7 @@ class ExperimentTable(tables.Table):
         orderable=True,
     )
     description = columns.Column(verbose_name="Description")
-    owner = columns.Column(accessor="owner.username", verbose_name="Created By")
-    bot = columns.Column(accessor="chatbot_prompt__name", verbose_name="Bot", orderable=True)
+    owner = columns.Column(accessor="owner__username", verbose_name="Created By")
     topic = columns.Column(accessor="source_material__topic", verbose_name="Topic", orderable=True)
     actions = columns.TemplateColumn(
         template_name="experiments/components/experiment_actions_column.html",
@@ -42,8 +40,8 @@ class SafetyLayerTable(tables.Table):
         template_name="generic/crud_actions_column.html",
         extra_context={
             "actions": [
-                table_actions.edit_action(url_name="experiments:safety_edit"),
-                table_actions.delete_action(url_name="experiments:safety_delete"),
+                actions.edit_action(url_name="experiments:safety_edit"),
+                actions.delete_action(url_name="experiments:safety_delete"),
             ]
         },
     )
@@ -51,7 +49,7 @@ class SafetyLayerTable(tables.Table):
     class Meta:
         model = SafetyLayer
         fields = (
-            "prompt",
+            "name",
             "messages_to_review",
             "actions",
         )
@@ -61,13 +59,13 @@ class SafetyLayerTable(tables.Table):
 
 
 class SourceMaterialTable(tables.Table):
-    owner = columns.Column(accessor="owner.username", verbose_name="Created By")
+    owner = columns.Column(accessor="owner__username", verbose_name="Created By")
     actions = columns.TemplateColumn(
         template_name="generic/crud_actions_column.html",
         extra_context={
             "actions": [
-                table_actions.edit_action(url_name="experiments:source_material_edit"),
-                table_actions.delete_action(url_name="experiments:source_material_delete"),
+                actions.edit_action(url_name="experiments:source_material_edit"),
+                actions.delete_action(url_name="experiments:source_material_delete"),
             ]
         },
     )
@@ -89,8 +87,8 @@ class SurveyTable(tables.Table):
         template_name="generic/crud_actions_column.html",
         extra_context={
             "actions": [
-                table_actions.edit_action(url_name="experiments:survey_edit"),
-                table_actions.delete_action(url_name="experiments:survey_delete"),
+                actions.edit_action(url_name="experiments:survey_edit"),
+                actions.delete_action(url_name="experiments:survey_delete"),
             ]
         },
     )
@@ -111,8 +109,8 @@ class ConsentFormTable(tables.Table):
         template_name="generic/crud_actions_column.html",
         extra_context={
             "actions": [
-                table_actions.edit_action(url_name="experiments:consent_edit"),
-                table_actions.delete_action(
+                actions.edit_action(url_name="experiments:consent_edit"),
+                actions.delete_action(
                     url_name="experiments:consent_delete",
                     display_condition=lambda request, record: not record.is_default,
                 ),
@@ -139,8 +137,8 @@ class NoActivityMessageConfigTable(tables.Table):
         template_name="generic/crud_actions_column.html",
         extra_context={
             "actions": [
-                table_actions.edit_action(url_name="experiments:no_activity_edit"),
-                table_actions.delete_action(url_name="experiments:no_activity_delete"),
+                actions.edit_action(url_name="experiments:no_activity_edit"),
+                actions.delete_action(url_name="experiments:no_activity_delete"),
             ]
         },
     )
@@ -156,39 +154,3 @@ class NoActivityMessageConfigTable(tables.Table):
         row_attrs = settings.DJANGO_TABLES2_ROW_ATTRS
         orderable = False
         empty_text = "No configs found."
-
-
-class PromptTable(tables.Table):
-    owner = columns.Column(accessor="owner.get_display_name", verbose_name="Created By")
-    actions = columns.TemplateColumn(
-        template_name="generic/crud_actions_column.html",
-        extra_context={
-            "actions": [
-                table_actions.edit_action(url_name="experiments:prompt_edit"),
-                table_actions.delete_action(url_name="experiments:prompt_delete"),
-            ]
-        },
-    )
-
-    def render_description(self, value):
-        if len(value) > 100:
-            return f"{value[:100]}..."
-        return value
-
-    def render_prompt(self, value):
-        if len(value) > 100:
-            return f"{value[:100]}..."
-        return value
-
-    class Meta:
-        model = Prompt
-        fields = (
-            "name",
-            "description",
-            "owner",
-            "prompt",
-            "input_formatter",
-        )
-        row_attrs = settings.DJANGO_TABLES2_ROW_ATTRS
-        orderable = False
-        empty_text = "No prompts found."

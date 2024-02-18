@@ -5,21 +5,34 @@ from django.contrib.auth.models import Group, Permission
 from django.db import models
 from django.urls import reverse
 from django.utils.translation import gettext
+from field_audit import audit_fields
+from field_audit.models import AuditingManager
 from waffle import get_setting
 from waffle.models import CACHE_EMPTY, AbstractUserFlag
 from waffle.utils import get_cache, keyfmt
 
+from apps.teams import model_audit_fields
 from apps.utils.models import BaseModel
 from apps.web.meta import absolute_url
 
 from . import roles
 
 
+class TeamObjectManager(AuditingManager):
+    pass
+
+
+class MembershipObjectManager(AuditingManager):
+    pass
+
+
+@audit_fields(*model_audit_fields.TEAM_FIELDS, audit_special_queryset_writes=True)
 class Team(BaseModel):
     """
     A Team, with members.
     """
 
+    objects = TeamObjectManager()
     name = models.CharField(max_length=100)
     slug = models.SlugField(unique=True)
     members = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name="teams", through="Membership")
@@ -65,7 +78,7 @@ class PermissionsMixin(models.Model):
                 .values_list("content_type__app_label", "codename")
                 .order_by()
             )
-            setattr(self, perm_cache_name, {"%s.%s" % (ct, name) for ct, name in perms})
+            setattr(self, perm_cache_name, {f"{ct}.{name}" for ct, name in perms})
         return getattr(self, perm_cache_name)
 
     def has_perm(self, perm):
@@ -75,6 +88,7 @@ class PermissionsMixin(models.Model):
         return all(self.has_perm(perm) for perm in perm_list)
 
 
+@audit_fields(*model_audit_fields.MEMBERSHIP_FIELDS, audit_special_queryset_writes=True)
 class Membership(BaseModel, PermissionsMixin):
     """
     A user's team membership
@@ -83,6 +97,8 @@ class Membership(BaseModel, PermissionsMixin):
     team = models.ForeignKey(Team, on_delete=models.CASCADE)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     role = models.CharField(max_length=100, choices=roles.ROLE_CHOICES)
+
+    objects = MembershipObjectManager()
 
     def __str__(self):
         return f"{self.user}: {self.team}"
@@ -142,7 +158,7 @@ class Flag(AbstractUserFlag):
     )
 
     def get_flush_keys(self, flush_keys=None):
-        flush_keys = super(Flag, self).get_flush_keys(flush_keys)
+        flush_keys = super().get_flush_keys(flush_keys)
         teams_cache_key = get_setting(Flag.FLAG_TEAMS_CACHE_KEY, Flag.FLAG_TEAMS_CACHE_KEY_DEFAULT)
         flush_keys.append(keyfmt(teams_cache_key, self.name))
         return flush_keys

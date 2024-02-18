@@ -1,25 +1,18 @@
 from datetime import datetime, timedelta
+from unittest.mock import Mock, patch
 
-import pytz
 from django.test import TestCase
 from freezegun import freeze_time
-from mock import Mock, patch
 
 from apps.channels.models import ExperimentChannel
 from apps.chat.models import ChatMessage, ChatMessageType
 from apps.chat.tasks import _bot_prompt_for_user, _no_activity_pings
-from apps.experiments.models import (
-    ConsentForm,
-    Experiment,
-    ExperimentSession,
-    NoActivityMessageConfig,
-    Prompt,
-    SessionStatus,
-)
+from apps.experiments.models import ConsentForm, Experiment, ExperimentSession, NoActivityMessageConfig, SessionStatus
 from apps.experiments.views.experiment import _start_experiment_session
 from apps.service_providers.models import LlmProvider
 from apps.teams.models import Team
 from apps.users.models import CustomUser
+from apps.utils.langchain import mock_experiment_llm
 
 
 class TasksTest(TestCase):
@@ -28,13 +21,6 @@ class TasksTest(TestCase):
         self.telegram_chat_id = 1234567891
         self.team = Team.objects.create(name="test-team")
         self.user = CustomUser.objects.create_user(username="testuser")
-        self.prompt = Prompt.objects.create(
-            team=self.team,
-            owner=self.user,
-            name="test-prompt",
-            description="test",
-            prompt="You are a helpful assistant",
-        )
         self.no_activity_config = NoActivityMessageConfig.objects.create(
             team=self.team, message_for_bot="Some message", name="Some name", max_pings=3, ping_after=1
         )
@@ -43,7 +29,7 @@ class TasksTest(TestCase):
             owner=self.user,
             name="TestExperiment",
             description="test",
-            chatbot_prompt=self.prompt,
+            prompt_text="You are a helpful assistant",
             no_activity_config=self.no_activity_config,
             consent_form=ConsentForm.get_default(self.team),
             llm_provider=LlmProvider.objects.create(
@@ -54,25 +40,25 @@ class TasksTest(TestCase):
                     "openai_api_key": "123123123",
                 },
             ),
+            llm="gpt-4",
         )
         self.experiment_channel = ExperimentChannel.objects.create(
             name="TestChannel", experiment=self.experiment, extra_data={"bot_token": "123123123"}, platform="telegram"
         )
         self.experiment_session = self._add_session(self.experiment)
 
-    @patch("apps.chat.bots.TopicBot._get_response")
     @patch("apps.chat.bots.create_conversation")
-    def test_getting_ping_message_saves_history(self, create_conversation, _get_response_mock):
+    def test_getting_ping_message_saves_history(self, create_conversation):
         create_conversation.return_value = Mock()
         expected_ping_message = "Hey, answer me!"
-        _get_response_mock.return_value = expected_ping_message
-        response = _bot_prompt_for_user(self.experiment_session, "Some message")
+        with mock_experiment_llm(self.experiment, responses=[expected_ping_message]):
+            response = _bot_prompt_for_user(self.experiment_session, "Some message")
         messages = ChatMessage.objects.filter(chat=self.experiment_session.chat).all()
         # Only the AI message should be there
-        self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0].message_type, "ai")
-        self.assertEqual(response, expected_ping_message)
-        self.assertEqual(messages[0].content, expected_ping_message)
+        assert len(messages) == 1
+        assert messages[0].message_type == "ai"
+        assert response == expected_ping_message
+        assert messages[0].content == expected_ping_message
 
     @patch("apps.chat.tasks._bot_prompt_for_user", return_value="Please answer")
     @patch("apps.chat.tasks._try_send_message")
@@ -82,7 +68,7 @@ class TasksTest(TestCase):
             owner=self.user,
             name="TestExperiment2",
             description="test2",
-            chatbot_prompt=self.prompt,
+            prompt_text="You are a helpful assistant",
             no_activity_config=None,
             consent_form=ConsentForm.get_default(self.team),
         )
@@ -116,7 +102,7 @@ class TasksTest(TestCase):
         # frozen_time = "2023-08-21 12:00:00"  # Set the desired frozen time
         with freeze_time(datetime.utcnow() + timedelta(minutes=5)):
             _no_activity_pings()
-        self.assertEqual(_try_send_message.call_count, 2)
+        assert _try_send_message.call_count == 2
 
     def _add_session(self, experiment: Experiment, session_status: SessionStatus = SessionStatus.ACTIVE):
         experiment_session = _start_experiment_session(

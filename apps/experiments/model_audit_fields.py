@@ -1,12 +1,11 @@
-PROMPT_FIELDS = ["owner", "name", "description", "prompt", "input_formatter", "team"]
-
 EXPERIMENT_FIELDS = [
     "owner",
     "name",
     "llm_provider",
     "llm",
     "temperature",
-    "chatbot_prompt",
+    "prompt_text",
+    "input_formatter",
     "safety_layers",
     "is_active",
     "tools_enabled",
@@ -23,7 +22,7 @@ EXPERIMENT_FIELDS = [
 ]
 
 SOURCE_MATERIAL_FIELDS = ["owner", "topic", "description", "material", "team"]
-SAFETY_LAYER_FIELDS = ["prompt", "messages_to_review", "default_response_to_user", "prompt_to_bot", "team"]
+SAFETY_LAYER_FIELDS = ["prompt_text", "messages_to_review", "default_response_to_user", "prompt_to_bot", "team"]
 CONSENT_FORM_FIELDS = [
     "name",
     "consent_text",
@@ -33,3 +32,14 @@ CONSENT_FORM_FIELDS = [
     "confirmation_text",
     "team",
 ]
+
+EXPERIMENT_CHANNEL_FIELDS = [
+    "name",
+    "experiment",
+    "active",
+    "extra_data",
+    "platform",
+    "messaging_provider",
+]
+
+NO_ACTIVITY_CONFIG_FIELDS = ["message_for_bot", "name", "max_pings", "ping_after", "team"]

@@ -2,6 +2,7 @@ import dataclasses
 import operator
 from functools import reduce
 
+from django.conf import settings
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import Group, Permission
 from django.db import models
@@ -15,7 +16,26 @@ TEAM_ADMIN_GROUP = "Team Admin"
 EXPERIMENT_ADMIN_GROUP = "Experiment Admin"
 ANALYSIS_ADMIN_GROUP = "Analysis Admin"
 ANALYSIS_USER_GROUP = "Analysis Users"
+ASSISTANT_ADMIN_GROUP = "Assistant Admin"
 CHAT_VIEWER_GROUP = "Chat Viewer"
+
+NORMAL_USER_GROUPS = [
+    EXPERIMENT_ADMIN_GROUP,
+    ANALYSIS_ADMIN_GROUP,
+    ASSISTANT_ADMIN_GROUP,
+    CHAT_VIEWER_GROUP,
+]
+
+
+class PermissionCheckBackend(ModelBackend):
+    """Check that permissions exist when in DEBUG mode"""
+
+    def has_perm(self, user_obj, perm, obj=None):
+        if settings.DEBUG:
+            app_label, codename = perm.split(".")
+            if not Permission.objects.filter(content_type__app_label=app_label, codename=codename).exists():
+                raise Exception(f"Permission not found {perm}")
+        return False  # pass check to next backend
 
 
 class TeamBackend(ModelBackend):
@@ -30,6 +50,7 @@ class TeamBackend(ModelBackend):
 # Mapping of app labels to content types which are covered by OCS permissions
 CONTENT_TYPES = {
     "analysis": ["analysis", "rungroup", "analysisrun", "resource"],
+    "assistants": ["openaiassistant"],
     "channels": ["experimentchannel"],
     "chat": ["chat", "chatmessage"],
     "experiments": [
@@ -38,14 +59,14 @@ CONTENT_TYPES = {
         "experimentsession",
         "noactivitymessageconfig",
         "participant",
-        "prompt",
         "promptbuilderhistory",
         "safetylayer",
         "sourcematerial",
         "survey",
         "syntheticvoice",
     ],
-    "service_providers": ["llmprovider", "voiceprovider", "messagingprovider"],
+    "files": ["file"],
+    "service_providers": ["authprovider", "llmprovider", "voiceprovider", "messagingprovider"],
     "teams": ["invitation", "membership", "team"],
 }
 
@@ -150,6 +171,13 @@ GROUPS = [
             ModelPermSetDef("analysis", "rungroup", [VIEW, CHANGE, ADD]),
             ModelPermSetDef("analysis", "analysisrun", [VIEW, CHANGE, ADD]),
             ModelPermSetDef("analysis", "resource", [VIEW, CHANGE, ADD]),
+        ],
+    ),
+    GroupDef(
+        ASSISTANT_ADMIN_GROUP,
+        [
+            AppPermSetDef("assistants", ALL),
+            AppPermSetDef("files", ALL),
         ],
     ),
 ]

@@ -1,4 +1,5 @@
-import mock
+from unittest import mock
+
 import pytest
 from django.core.files.base import ContentFile
 
@@ -12,10 +13,10 @@ from apps.analysis.tests.factories import RunGroupFactory
 INPUT_DATA = "here is some text to play with"
 
 
-@pytest.fixture
-def resource(team):
+@pytest.fixture()
+def resource(team_with_users):
     resource = Resource.objects.create(
-        team=team,
+        team=team_with_users,
         name="test text",
         type=ResourceType.TEXT,
     )
@@ -23,7 +24,7 @@ def resource(team):
     return resource
 
 
-@pytest.fixture
+@pytest.fixture()
 def run_group(resource):
     run_group = RunGroupFactory(team=resource.team, params={"resource_id": resource.id, "prompt": "test"})
     run_group.analysis.llm_provider.get_llm_service = mock.Mock()

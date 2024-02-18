@@ -1,3 +1,4 @@
+{% load waffle_tags %}
 {% load i18n %}
 {% load team_tags %}
 {% if request.team %}
@@ -7,13 +8,6 @@
       {% translate "Experiments" %}
     </a>
     <ul>
-      <li>
-        <a href="{% url 'experiments:prompt_home' request.team.slug %}"
-           {% if active_tab == 'prompts' %}class="active"{% endif %}>
-          <i class="fa-solid fa-terminal fa-fw"></i>
-          {% translate "Prompts" %}
-        </a>
-      </li>
       <li>
         <a href="{% url 'experiments:safety_home' request.team.slug %}"
            {% if active_tab == 'safety_layers' %}class="active"{% endif %}>
@@ -57,14 +51,26 @@
       {% translate "Prompt Builder" %}
     </a>
   </li>
-  <li>
-  {% if perms.analysis.view_analysis %}
-    <a href="{% url 'analysis:home' request.team.slug %}" {% if active_tab == 'analysis' %}class="active"{% endif %}>
-      <i class="fa-solid fa-magnifying-glass-chart"></i>
-      {% translate "Analysis Pipelines" %}<span class="badge badge-sm">beta</span>
-    </a>
-  {% endif %}
-  </li>
+  {% flag "assistants" %}
+    <li>
+      {% if perms.assistants.view_openaiassistant %}
+        <a href="{% url 'assistants:home' request.team.slug %}" {% if active_tab == 'assistants' %}class="active"{% endif %}>
+          <i class="fa-solid fa-robot"></i>
+          {% translate "Assistants" %}<span class="badge badge-sm">beta</span>
+        </a>
+      {% endif %}
+    </li>
+  {% endflag %}
+  {% flag "pipelines" %}
+    <li>
+      {% if perms.analysis.view_analysis %}
+        <a href="{% url 'analysis:home' request.team.slug %}" {% if active_tab == 'analysis' %}class="active"{% endif %}>
+          <i class="fa-solid fa-magnifying-glass-chart"></i>
+          {% translate "Analysis Pipelines" %}<span class="badge badge-sm">beta</span>
+        </a>
+      {% endif %}
+    </li>
+  {% endflag %}
 {#  <li>#}
 {#    <a href="{% url 'experiments:my_chats' request.team.slug %}" {% if active_tab == 'chat_home' %}class="active"{% endif %}>#}
 {#      <i class="fa fa-comments fa-fw"></i>#}

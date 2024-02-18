@@ -1,12 +1,12 @@
 import logging
 from contextlib import contextmanager
 
-from celery import chord
+from celery import chord, shared_task
 from celery import group as celery_group
-from celery import shared_task
 from django.utils import timezone
 
 from apps.analysis.core import PipelineContext, StepContext
+from apps.analysis.exceptions import StepError
 from apps.analysis.log import LogEntry, Logger, LogStream
 from apps.analysis.models import AnalysisRun, RunGroup, RunStatus
 from apps.analysis.pipelines import get_data_pipeline, get_source_pipeline
@@ -32,13 +32,20 @@ class RunStatusContext:
         self.run.save()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.run.refresh_from_db(fields=["status"])
+
         if exc_type:
             if exc_type == PipelineSplitSignal:
                 return True
-            log.exception("Error running analysis")
             self.run.status = RunStatus.ERROR
-            self.run.error = repr(exc_val)
-        else:
+            if exc_type == StepError:
+                self.run.error = str(exc_val)
+            else:
+                log.exception("Error running analysis")
+                self.run.error = repr(exc_val)
+        elif self.run.is_cancelling:
+            self.run.status = RunStatus.CANCELLED
+        elif not self.run.is_cancelled:
             self.run.status = RunStatus.SUCCESS
         self.run.end_time = timezone.now()
         self.run.save()
@@ -74,14 +81,24 @@ class RunLogStream(LogStream):
 @shared_task
 def run_analysis(run_group_id: int):
     group = RunGroup.objects.select_related("team", "analysis", "analysis__llm_provider").get(id=run_group_id)
+    if group.is_cancelling:
+        group.status = RunStatus.CANCELLED
+        group.save()
+        return
+    elif group.is_complete:
+        return
 
-    with RunStatusContext(group):
+    with RunStatusContext(group, bubble_errors=False):
         source_result = run_serial_pipeline(group, group.analysis.source, get_source_pipeline, StepContext.initial())
+
+        group.refresh_from_db(fields=["status"])
+        if group.is_cancelled:
+            return
 
         if isinstance(source_result, list) and len(source_result) > 1:
             run_parallel_pipeline(group, source_result)
             raise PipelineSplitSignal()
-        else:
+        elif source_result:
             next_intput = source_result[0] if isinstance(source_result, list) else source_result
             run_serial_pipeline(group, group.analysis.pipeline, get_data_pipeline, next_intput)
 
@@ -126,6 +143,9 @@ def run_pipline_split(self, run_id: int):
     run = AnalysisRun.objects.select_related(
         "group", "group__team", "group__analysis", "group__analysis__llm_provider"
     ).get(id=run_id)
+    if run.is_cancelled:
+        return
+
     run.task_id = self.request.id
     run.save()
 

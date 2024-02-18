@@ -1,6 +1,7 @@
 import dataclasses
 import functools
 from enum import Enum
+from typing import Any
 
 from django import forms
 from django.db import models
@@ -11,8 +12,10 @@ from apps.generics.type_select_form import TypeSelectForm
 
 from . import const
 from .models import (
+    AuthProvider,
+    AuthProviderType,
     LlmProvider,
-    LlmProviderType,
+    LlmProviderTypes,
     MessagingProvider,
     MessagingProviderType,
     VoiceProvider,
@@ -38,9 +41,10 @@ class ServiceProviderType:
 
 
 class ServiceProvider(ServiceProviderType, Enum):
-    llm = const.LLM, "LLM Service Provider", LlmProvider, LlmProviderType, ["name", "type", "llm_models"]
+    llm = const.LLM, "LLM Service Provider", LlmProvider, LlmProviderTypes, ["name", "type", "llm_models"]
     voice = const.VOICE, "Voice Service Provider", VoiceProvider, VoiceProviderType, ["name", "type"]
     messaging = const.MESSAGING, "Messaging Provider", MessagingProvider, MessagingProviderType, ["name", "type"]
+    auth = const.AUTH, "Authentication Provider", AuthProvider, AuthProviderType, ["name", "type"]
 
     @property
     def table(self) -> tables.Table:
@@ -64,7 +68,7 @@ def get_service_provider_config_form(provider: ServiceProvider, data=None, insta
     return TypeSelectForm(
         primary=_get_main_form(provider, data=data.copy() if data else None, instance=instance),
         secondary={
-            subtype: subtype.form_cls(data=data.copy() if data else None, initial=initial_config)
+            str(subtype): subtype.form_cls(data=data.copy() if data else None, initial=initial_config)
             for subtype in provider.subtype
         },
         secondary_key_field=provider.provider_type_field,
@@ -94,12 +98,11 @@ def formfield_for_dbfield(db_field: Field, provider: ServiceProvider, **kwargs):
     return db_field.formfield(**kwargs)
 
 
-def get_llm_provider_choices(team) -> list[dict]:
-    return sorted(
-        [
-            {"value": model, "text": model, "provider": provider_id}
-            for provider_id, models in team.llmprovider_set.values_list("id", "llm_models")
-            for model in models
-        ],
-        key=lambda v: v["text"],
-    )
+def get_llm_provider_choices(team) -> dict[int, dict[str, list[dict[str, Any]]]]:
+    providers = {}
+    for provider in team.llmprovider_set.all():
+        providers[provider.id] = {
+            "models": [{"value": model, "text": model} for model in sorted(provider.llm_models)],
+            "supports_assistants": provider.type_enum.supports_assistants,
+        }
+    return providers

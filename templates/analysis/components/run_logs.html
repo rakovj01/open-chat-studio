@@ -1,4 +1,22 @@
-<div class="font-mono whitespace-pre-wrap">
-{% for entry in run.log.entries %}{{ entry.timestamp }} {{ entry.level }} [{{ entry.logger }}] {{ entry.message }}
-{% endfor %}
+<div class="font-mono">
+
+  <div class="flex items-center cursor-pointer float-right">
+    <span class="label-text mr-2">Show Debug</span>
+    <input x-model="showDebug" type="checkbox" class="toggle" />
+  </div>
+  {% for entry in run.get_log_entries %}
+    <div class="log log-{{ entry.level.name|lower }}" {% if entry.is_debug %}x-show="showDebug"{% endif %}>
+      <time datetime="{{ entry.timestamp.isoformat }}"
+            title="{{ entry.timestamp }}">{{ entry.timestamp|time:"H:i:s" }}</time>
+      <div class="badge
+                  {% if entry.is_debug %}badge-neutral
+                  {% elif entry.is_info %}badge-info
+                  {% elif entry.is_warning %}badge-warning
+                  {% elif entry.is_error %}badge-error
+                  {% endif %}
+                 ">{{ entry.level.name }}</div>
+      <div class="badge badge-ghost">[{{ entry.logger }}]</div>
+      <span>{{ entry.message }}</span>
+    </div>
+  {% endfor %}
 </div>

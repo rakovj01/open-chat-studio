@@ -11,8 +11,8 @@ from apps.teams.models import Team
 
 from .exceptions import StepError
 from .log import Logger
-from .models import AnalysisRun, Resource
-from .serializers import create_resource_for_data, get_serializer_by_name
+from .models import AnalysisRun, Resource, ResourceMetadata
+from .serializers import create_resource_for_data, create_resource_for_raw_data, get_serializer_by_name
 
 PipeIn = TypeVar("PipeIn", contravariant=True)
 PipeOut = TypeVar("PipeOut", covariant=True)
@@ -27,7 +27,7 @@ class StepContext(Generic[PipeOut]):
     metadata: dict = dataclasses.field(default_factory=dict)
     resource: Resource = None
 
-    def create_resource(self, context: "PipelineContext"):
+    def get_or_create_resource(self, context: "PipelineContext"):
         if not self.resource:
             self.resource = context.create_resource(self.data, self.name)
         return self.resource
@@ -53,6 +53,8 @@ class PipelineContext:
     params: dict = dataclasses.field(default_factory=dict)
     create_resources: bool = False
 
+    _is_cancelled = False
+
     @cached_property
     def llm_service(self) -> LlmService:
         return self.run.group.analysis.llm_provider.get_llm_service()
@@ -61,11 +63,27 @@ class PipelineContext:
     def team(self) -> Team:
         return self.run.group.team
 
-    def create_resource(self, data: Any, name: str):
+    @property
+    def is_cancelled(self):
+        if not self.run:
+            return  # unit test
+        if self._is_cancelled:
+            return self._is_cancelled
+        self.run.refresh_from_db(fields=["status"])
+        self._is_cancelled = self.run.is_cancelled
+        return self._is_cancelled
+
+    def create_resource(
+        self, data: Any, name: str, serialize: bool = True, metadata: ResourceMetadata = None
+    ) -> Resource | None:
         if not self.create_resources:
             return
         qualified_name = f"{self.run.group.analysis.name}_{self.run.group.id}_{self.run.name}_{name}"
-        resource = create_resource_for_data(self.team, data, qualified_name)
+        if not serialize:
+            assert metadata, "Metadata must be provided for raw data"
+            resource = create_resource_for_raw_data(self.team, data, qualified_name, metadata)
+        else:
+            resource = create_resource_for_data(self.team, data, qualified_name)
         self.run.output_resources.add(resource)
         return resource
 
@@ -122,6 +140,8 @@ class Pipeline:
             step.initialize(pipeline_context, step_count, index)
             out_context = step(self.context_chain[-1])
             self.context_chain.append(out_context)
+            if pipeline_context.is_cancelled:
+                return self.context_chain[-1]
         return self.context_chain[-1]
 
 
@@ -237,6 +257,10 @@ class BaseStep(Generic[PipeIn, PipeOut]):
     def name(self):
         return self.__class__.__name__
 
+    @property
+    def is_cancelled(self):
+        return self.pipeline_context.is_cancelled
+
     def initialize(self, pipeline_context: PipelineContext, step_count: int = 1, current_step_index: int = 0):
         self.pipeline_context = pipeline_context
         self._params = self._params.merge(self.pipeline_context.params, self.pipeline_context.params.get(self.name, {}))
@@ -252,18 +276,18 @@ class BaseStep(Generic[PipeIn, PipeOut]):
                 self.preflight_check(context)
 
                 self.log.debug(f"Params: {self._params}")
-                result = self.run(self._params, context.get_data())
+                result = self.run(self._params, context)
                 for res in [result] if isinstance(result, StepContext) else result:
                     if not res.name:
                         res.name = self.name
-                    if self.is_last:
+                    if self.is_last and not self.is_cancelled:
                         # always create resources for last step
-                        res.create_resource(self.pipeline_context)
+                        res.get_or_create_resource(self.pipeline_context)
                 return result
         finally:
             self.log.info(f"Step {self.name} complete")
 
-    def run(self, params: Params, data: PipeIn) -> StepContext[PipeOut] | list[StepContext[PipeOut]]:
+    def run(self, params: Params, context: StepContext[PipeIn]) -> StepContext[PipeOut] | list[StepContext[PipeOut]]:
         """Run the step and return the output data and metadata."""
         raise NotImplementedError
 
@@ -271,14 +295,16 @@ class BaseStep(Generic[PipeIn, PipeOut]):
         """Perform any preflight checks on the input data or pipeline context."""
         pass
 
-    def create_resource(self, data: Any, name: str, force=False):
+    def create_resource(
+        self, data: Any, name: str, force=False, serialize=True, metadata: ResourceMetadata = None
+    ) -> Resource | None:
         """Create a Resource for the data and add it to the step.
         This will only create resources if the pipeline context is configured to do so and this step is the last
         step in the pipeline (or force=True).
         """
 
         if force or self.is_last:
-            resource = self.pipeline_context.create_resource(data, name)
+            resource = self.pipeline_context.create_resource(data, name, serialize, metadata)
             if resource:
                 self.resources.append(resource)
             return resource

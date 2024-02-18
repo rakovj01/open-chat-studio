@@ -1,9 +1,7 @@
-import pytest
 from django.test import TestCase
 
 from apps.channels.models import ChannelPlatform, ExperimentChannel
-from apps.experiments.models import ConsentForm, Experiment, Prompt
-from apps.service_providers.models import LlmProvider
+from apps.experiments.models import ConsentForm, Experiment
 from apps.teams.models import Team
 from apps.users.models import CustomUser
 
@@ -14,19 +12,12 @@ class TestExperimentChannelObjectManager(TestCase):
         self.telegram_chat_id = 1234567891
         self.team = Team.objects.create(name="test-team")
         self.user = CustomUser.objects.create_user(username="testuser")
-        self.prompt = Prompt.objects.create(
-            team=self.team,
-            owner=self.user,
-            name="test-prompt",
-            description="test",
-            prompt="You are a helpful assistant",
-        )
         self.experiment = Experiment.objects.create(
             team=self.team,
             owner=self.user,
             name="TestExperiment",
             description="test",
-            chatbot_prompt=self.prompt,
+            prompt_text="You are a helpful assistant",
             consent_form=ConsentForm.get_default(self.team),
         )
         self.bot_token = "123123123"
@@ -51,4 +42,4 @@ class TestExperimentChannelObjectManager(TestCase):
             channels = ExperimentChannel.objects.filter_extras(
                 key=key, value=value, platform=platform, team_slug=team_slug
             )
-            self.assertEqual(len(channels), expected_result_length)
+            assert len(channels) == expected_result_length

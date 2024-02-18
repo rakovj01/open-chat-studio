@@ -87,12 +87,12 @@ def ngrok_url(c: Context):
         try:
             response = requests.get("http://localhost:4040/api/tunnels")
             if response.status_code == 200:
+                public_url = response.json()["tunnels"][0]["public_url"].split("https://")[1]
                 break
         except Exception:
             time.sleep(1)
             print("Trying to a public address from ngrok")
 
-    public_url = response.json()["tunnels"][0]["public_url"].split("https://")[1]
     print(f"Public address found: {public_url}")
     return public_url
 
@@ -109,3 +109,12 @@ def runserver(c: Context, public=False):
 @task
 def celery(c: Context):
     c.run('watchfiles --filter python "celery -A gpt_playground worker -l INFO -B"', echo=True, pty=True)
+
+
+@task
+def ruff(c: Context, no_fix=False, unsafe_fixes=False):
+    """Run ruff checks and formatting. Use --unsafe-fixes to apply unsafe fixes."""
+    fix_flag = "" if no_fix else "--fix"
+    unsafe_fixes_flag = "--unsafe-fixes" if unsafe_fixes else ""
+    c.run(f"ruff check {fix_flag} {unsafe_fixes_flag}", echo=True, pty=True)
+    c.run("ruff format", echo=True, pty=True)

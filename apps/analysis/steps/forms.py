@@ -1,9 +1,14 @@
+import csv
+from datetime import datetime
+
 from django import forms
 from django.core.files.base import ContentFile
+from django.utils import timezone
 from django.utils.encoding import smart_bytes
 
 from apps.analysis.core import Params, ParamsForm
 from apps.analysis.models import Resource, ResourceType
+from apps.service_providers.models import AuthProvider
 
 
 class ResourceLoaderParamsForm(ParamsForm):
@@ -45,6 +50,7 @@ class ResourceLoaderParamsForm(ParamsForm):
                 type=self.cleaned_data["file_type"],
                 file=self.cleaned_data["file"],
                 content_size=self.cleaned_data["file"].size,
+                content_type=self.cleaned_data["file"].content_type,
             )
         elif self.cleaned_data["text"]:
             resource = Resource.objects.create(
@@ -82,12 +88,35 @@ def get_duration_choices():
 
 class TimeseriesFilterForm(ParamsForm):
     form_name = "Timeseries Filter Parameters"
-    template_name = "analysis/forms/basic.html"
+    template_name = "analysis/forms/timeseries_filter.html"
     duration_value = forms.IntegerField(required=False, label="Duration")
     duration_unit = forms.TypedChoiceField(
         required=False, choices=get_duration_choices(), label="Duration Unit", coerce=int
     )
-    anchor_point = forms.DateField(required=False, label="Starting on")
+    anchor_mode = forms.ChoiceField(
+        required=False,
+        label="Starting from",
+        choices=[
+            ("relative_start", "Beginning of data"),
+            ("relative_end", "End of data"),
+            ("absolute", "Specific date"),
+        ],
+    )
+    anchor_point = forms.DateField(required=False, label="Starting on", initial=timezone.now)
+    minimum_data_points = forms.IntegerField(required=False, label="Minimum Data Points for Dataset", initial=10)
+    calendar_time = forms.BooleanField(
+        required=False,
+        label="Use calendar periods",
+        initial=True,
+        help_text="If checked, the start and end times of the window will be adjusted to the nearest calendar period. "
+        "For example, if the duration is 1 day, the window will start at midnight and end at 11:59:59 PM.",
+    )
+
+    def reformat_initial(self, initial):
+        anchor_point = initial.get("anchor_point")
+        if anchor_point and isinstance(anchor_point, str):
+            initial["anchor_point"] = datetime.fromisoformat(anchor_point).date()
+        return initial
 
     def clean_unit(self):
         from apps.analysis.steps.filters import DurationUnit
@@ -100,8 +129,15 @@ class TimeseriesFilterForm(ParamsForm):
     def get_params(self):
         from .filters import TimeseriesFilterParams
 
+        data = dict(self.cleaned_data)
+        if data["anchor_mode"] != "absolute":
+            del data["anchor_point"]
+
+        if data["minimum_data_points"] is None:
+            del data["minimum_data_points"]
+
         try:
-            return TimeseriesFilterParams(**self.cleaned_data)
+            return TimeseriesFilterParams(**data)
         except ValueError as e:
             raise forms.ValidationError(repr(e))
 
@@ -146,7 +182,7 @@ class TimeseriesSplitterParamsForm(ParamsForm):
             raise forms.ValidationError(repr(e))
 
 
-class AssistantParamsForm(ParamsForm):
+class StaticAssistantParamsForm(ParamsForm):
     form_name = "Assistant Parameters"
     template_name = "analysis/forms/basic.html"
     assistant_id = forms.CharField()
@@ -157,6 +193,20 @@ class AssistantParamsForm(ParamsForm):
 
         try:
             return AssistantParams(assistant_id=self.cleaned_data["assistant_id"], prompt=self.cleaned_data["prompt"])
+        except ValueError as e:
+            raise forms.ValidationError(repr(e))
+
+
+class DynamicAssistantParamsForm(ParamsForm):
+    form_name = "Assistant Parameters"
+    template_name = "analysis/forms/basic.html"
+    prompt = forms.CharField(widget=forms.Textarea)
+
+    def get_params(self):
+        from .processors import AssistantParams
+
+        try:
+            return AssistantParams(prompt=self.cleaned_data["prompt"])
         except ValueError as e:
             raise forms.ValidationError(repr(e))
 
@@ -181,3 +231,91 @@ class WhatsappParserParamsForm(ParamsForm):
             )
         except ValueError as e:
             raise forms.ValidationError(repr(e))
+
+
+class CommCareAppLoaderStaticConfigForm(ParamsForm):
+    form_name = "CommCare App Loader Configuration"
+    template_name = "analysis/forms/basic.html"
+    cc_url = forms.URLField(label="CommCare Base URL", required=True, initial="https://www.commcarehq.org")
+    auth_provider = forms.ModelChoiceField(label="Authentication", queryset=None, required=False)
+    app_list = forms.CharField(
+        widget=forms.Textarea,
+        label="Application List",
+        help_text="Enter one app per line: domain, app_id, name",
+        required=False,
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["auth_provider"].queryset = _get_auth_provider_queryset(self.request)
+
+    def reformat_initial(self, initial):
+        if "app_list" in initial:
+            initial["app_list"] = "\n".join(
+                f"{app['domain']}, {app['app_id']}, {app['name']}" for app in initial["app_list"]
+            )
+        initial["auth_provider"] = initial.get("auth_provider_id", None)
+        return initial
+
+    def clean_cc_url(self):
+        url = self.cleaned_data["cc_url"]
+        if url.endswith("/"):
+            url = url[:-1]
+        return url
+
+    def clean_app_list(self):
+        app_list = self.cleaned_data["app_list"]
+        csv_reader = csv.reader([line for line in app_list.splitlines() if line.strip()])
+        return [{"domain": row[0].strip(), "app_id": row[1].strip(), "name": row[2].strip()} for row in csv_reader]
+
+    def get_params(self):
+        from .loaders import CommCareAppLoaderParams
+
+        return CommCareAppLoaderParams(
+            cc_url=self.cleaned_data["cc_url"],
+            app_list=self.cleaned_data["app_list"],
+            auth_provider_id=self.cleaned_data["auth_provider"].id,
+        )
+
+
+class CommCareAppLoaderParamsForm(ParamsForm):
+    form_name = "CommCare App Loader Parameters"
+    template_name = "analysis/forms/commcare_loader_params.html"
+    select_app_id = forms.ChoiceField(label="Application", required=False)
+    domain = forms.CharField(required=False, label="CommCare Project Space")
+    app_id = forms.CharField(required=False, label="CommCare Application ID")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        initial = kwargs.get("initial")
+        if initial and initial.get("app_list"):
+            self.fields["select_app_id"].choices = [(app["app_id"], app["name"]) for app in initial["app_list"]]
+
+    def get_params(self):
+        from .loaders import CommCareAppLoaderParams
+
+        select_app_id = self.cleaned_data.get("select_app_id")
+        app_id = self.cleaned_data.get("app_id")
+        domain = self.cleaned_data.get("domain")
+        if not select_app_id and not app_id and not domain:
+            raise forms.ValidationError("Either an application or a domain and app_id must be provided.")
+
+        if select_app_id:
+            app_list = self.initial.get("app_list")
+            app = next((app for app in app_list if app["app_id"] == select_app_id), None)
+            app_id = app["app_id"]
+            domain = app["domain"]
+
+        try:
+            return CommCareAppLoaderParams(
+                cc_domain=domain,
+                cc_app_id=app_id,
+                cc_url=self.initial["cc_url"],
+                auth_provider_id=self.initial["auth_provider_id"],
+            )
+        except ValueError as e:
+            raise forms.ValidationError(repr(e))
+
+
+def _get_auth_provider_queryset(request):
+    return AuthProvider.objects.filter(team=request.team)
